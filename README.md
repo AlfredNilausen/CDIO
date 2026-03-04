@@ -1,0 +1,1 @@
+python -m pip install python-ev3dev2 //setup
