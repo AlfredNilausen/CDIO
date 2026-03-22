@@ -7,23 +7,31 @@ Uses only pre-installed ev3dev2 libraries — nothing to install.
 Motors: A = left wheel, D = right wheel
 """
 import socket
-from ev3dev2.motor import LargeMotor, OUTPUT_A, OUTPUT_D, SpeedPercent
+from ev3dev2.motor import LargeMotor, MediumMotor, OUTPUT_A, OUTPUT_C, OUTPUT_D, SpeedPercent
 
 SPEED = 60
 PORT  = 5555
 
 try:
-    motor_left  = LargeMotor(OUTPUT_A)
-    print("Motor A (left) OK")
+    motor_left  = LargeMotor(OUTPUT_D)
+    print("Motor D (left) OK")
+except Exception as e:
+    print("Motor D ERROR: {}".format(e))
+    raise
+
+try:
+    motor_right = LargeMotor(OUTPUT_A)
+    print("Motor A (right) OK")
 except Exception as e:
     print("Motor A ERROR: {}".format(e))
     raise
 
 try:
-    motor_right = LargeMotor(OUTPUT_D)
-    print("Motor D (right) OK")
+    motor_c = LargeMotor(OUTPUT_C)
+    motor_c.on(SpeedPercent(SPEED))
+    print("Motor C (center) OK - running")
 except Exception as e:
-    print("Motor D ERROR: {}".format(e))
+    print("Motor C ERROR: {}".format(e))
     raise
 
 def forward():  motor_left.on(SpeedPercent( SPEED)); motor_right.on(SpeedPercent( SPEED))
@@ -55,5 +63,6 @@ try:
                 print("Command error: {}".format(e))
 finally:
     stop()
+    motor_c.off()
     client.close()
     server.close()
