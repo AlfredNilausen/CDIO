@@ -44,7 +44,7 @@ The EV3's IP is currently set to `169.254.250.81` in `pc_controller.py`.
 
 In Terminal from the project directory:
 ```
-scp ev3_server.py robot@169.254.250.81:/home/robot/
+scp ev3_server.py robot@169.254.x.x:/home/robot/
 ```
 Default credentials: **user:** `robot` **password:** `maker`
 

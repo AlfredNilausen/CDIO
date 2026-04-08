@@ -18,7 +18,7 @@ import sys
 import socket
 from pynput import keyboard
 
-EV3_IP   = "169.254.152.69"
+EV3_IP   = "192.168.137.3"
 EV3_PORT = 5555
 
 KEY_CMD = {
