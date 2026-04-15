@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 # Change this if needed
-CAMERA_INDEX = 1
+CAMERA_INDEX = 0
 
 cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
 

@@ -27,7 +27,7 @@ def is_circle(cnt):
     return circularity > 0.7
 
 
-CAMERA_INDEX = 1
+CAMERA_INDEX = 0
 
 cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
