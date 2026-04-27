@@ -8,7 +8,8 @@ Controls:
     DOWN  arrow -> backward
     LEFT  arrow -> turn left  (pivot)
     RIGHT arrow -> turn right (pivot)
-    Release key -> stop
+    DELETE      -> motor C reverse (hold)
+    Release key -> stop / motor C normal
     ESC         -> quit
 
 Requirements (PC only):
@@ -16,16 +17,19 @@ Requirements (PC only):
 """
 import sys
 import socket
+import threading
 from pynput import keyboard
 
 EV3_IP   = "192.168.137.3"
 EV3_PORT = 5555
 
 KEY_CMD = {
-    keyboard.Key.up:    b'F',
-    keyboard.Key.down:  b'B',
-    keyboard.Key.left:  b'L',
-    keyboard.Key.right: b'R',
+    keyboard.Key.up:     b'F',
+    keyboard.Key.down:   b'B',
+    keyboard.Key.left:   b'L',
+    keyboard.Key.right:  b'R',
+    keyboard.Key.space:  b'N',
+    keyboard.Key.delete: b'M',
 }
 
 print(f"Connecting to EV3 at {EV3_IP}:{EV3_PORT} ...")
@@ -39,7 +43,21 @@ except OSError as e:
     print("Is ev3_server.py running on the EV3?")
     sys.exit(1)
 
-print("Connected! Arrow keys to drive. ESC to quit.\n")
+print("Connected! Arrow keys to drive. DELETE to reverse motor C. ESC to quit.\n")
+
+
+def listen_from_ev3():
+    while True:
+        try:
+            data = sock.recv(1)
+            if not data:
+                break
+            if data == b'X':
+                print("  WARNING: Motor C stalled!")
+        except OSError:
+            break
+
+threading.Thread(target=listen_from_ev3, daemon=True).start()
 
 
 def send(cmd: bytes):
@@ -73,6 +91,12 @@ def on_press(key):
 
 def on_release(key):
     global _active
+ #   if key == keyboard.Key.delete:
+ #       if _active == b'M':
+ #           _active = None
+  #          send(b'N')
+   #         print("  motor C: normal")
+    #    return
     if KEY_CMD.get(key) == _active:
         _active = None
         send(b'S')
