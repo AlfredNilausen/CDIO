@@ -11,7 +11,8 @@ import time
 import threading
 from ev3dev2.motor import LargeMotor, MediumMotor, OUTPUT_A, OUTPUT_C, OUTPUT_D, SpeedPercent
 
-SPEED = 60
+SPEED = 50
+SPEED_COLLECTOR = 40
 PORT  = 5555
 
 try:
@@ -41,8 +42,8 @@ def backward():      motor_left.on(SpeedPercent(-SPEED)); motor_right.on(SpeedPe
 def left():          motor_left.on(SpeedPercent(-SPEED)); motor_right.on(SpeedPercent( SPEED))
 def right():         motor_left.on(SpeedPercent( SPEED)); motor_right.on(SpeedPercent(-SPEED))
 def stop():          motor_left.off(); motor_right.off()
-def motor_c_rev():   motor_c.on(SpeedPercent(-SPEED))
-def motor_c_norm():  motor_c.on(SpeedPercent( SPEED))
+def motor_c_rev():   motor_c.on(SpeedPercent(-SPEED_COLLECTOR))
+def motor_c_norm():  motor_c.on(SpeedPercent( SPEED_COLLECTOR))
 
 _unjamming = False
 
@@ -52,9 +53,9 @@ def unjam_motor_c():
         return
     _unjamming = True
     print("Motor C jammed - reversing to unjam...")
-    motor_c.on(SpeedPercent(-SPEED))
+    motor_c.on(SpeedPercent(-SPEED_COLLECTOR))
     time.sleep(0.5)
-    motor_c.on(SpeedPercent(SPEED))
+    motor_c.on(SpeedPercent(SPEED_COLLECTOR))
     print("Motor C unjammed")
     _unjamming = False
 
