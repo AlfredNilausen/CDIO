@@ -32,6 +32,9 @@ from homography import (
     BOARD_HEIGHT_MM,
 )
 
+from robot_client import get_client
+robot = get_client()
+robot.connect()
 # ════════════════════════════════════════════════════════════════════════════
 # KONFIGURATION
 # ════════════════════════════════════════════════════════════════════════════
@@ -652,6 +655,8 @@ while True:
             print(f"Rute beregnet: {len(last_route_mm)} waypoints")
             for i, wp in enumerate(last_route_mm, 1):
                 print(f"  [{i:2d}]  ({wp[0]:.1f}, {wp[1]:.1f}) mm")
+        if robot.connected and last_dir_info.get("found"):
+            robot.send_route(last_route_mm, start_mm, last_dir_info["heading"])
 
     # ── p: snapshot ─────────────────────────────────────────────────────────
     elif key == ord("p"):
