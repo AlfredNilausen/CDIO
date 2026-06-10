@@ -20,7 +20,7 @@ import time
 # KONFIGURATION
 # ─────────────────────────────────────────────
 
-EV3_HOST = "10.42.0.2"    # ← skift til din EV3's IP
+EV3_HOST = "192.168.0.1"    # ← skift til din EV3's IP
                            #   BT:  10.42.0.2  (typisk)
                            #   USB: 192.168.0.1
 EV3_PORT = 9999

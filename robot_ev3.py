@@ -1,154 +1,164 @@
 #!/usr/bin/env python3
 """
-robot_ev3.py  —  kører PÅ EV3'en
+robot_ev3.py  -  korer PA EV3
 
-Modtager waypoints fra PC via TCP socket og kører motorerne.
-
-Start på EV3:
-    python3 robot_ev3.py
-
-Kræver ev3dev + ev3dev-python:
-    pip3 install ev3dev2
+Motor A = hojre forhjul
+Motor D = venstre forhjul
+Motor C = opsamlingsmekanisme
+Ingen gyro - drejer via hjulomkreds-beregning
 """
 
 import socket
 import json
 import math
-from ev3dev2.motor import LargeMotor, OUTPUT_A, OUTPUT_B, SpeedPercent, MoveSteering
-from ev3dev2.sensor.lego import GyroSensor
-from ev3dev2.sensor import INPUT_1
+from ev3dev2.motor import LargeMotor, OUTPUT_A, OUTPUT_C, OUTPUT_D, SpeedPercent
 
 # ─────────────────────────────────────────────
-# KONFIGURATION  — tilpas til din robot
+# KONFIGURATION
 # ─────────────────────────────────────────────
 
-HOST        = "0.0.0.0"   # lyt på alle interfaces
-PORT        = 9999
+HOST = "0.0.0.0"
+PORT = 9999
 
-WHEEL_BASE_MM    = 120    # afstand mellem de to hjul (mm)
-WHEEL_DIAM_MM    = 56     # hjuldiameter (mm)
+WHEEL_BASE_MM   = 750   # afstand mellem hjulene (maal efter paa robotten)
+WHEEL_DIAM_MM   = 65    # hjuldiameter (maal efter paa robotten)
 
-DRIVE_SPEED      = 30     # % af max hastighed ved kørsel
-TURN_SPEED       = 20     # % ved drejning
-POSITION_TOL_MM  = 30     # acceptabel afstand til waypoint (mm)
-ANGLE_TOL_DEG    = 5      # acceptabel vinkelafvigelse (grader)
-
-# ─────────────────────────────────────────────
-# MOTORER + SENSOR
-# ─────────────────────────────────────────────
-
-steer   = MoveSteering(OUTPUT_A, OUTPUT_B)
-gyro    = GyroSensor(INPUT_1)
-gyro.mode = "GYRO-ANG"
-
-def reset_gyro():
-    gyro.mode = "GYRO-RATE"
-    gyro.mode = "GYRO-ANG"
+DRIVE_SPEED     = 30    # % ved korslen
+TURN_SPEED      = 20    # % ved drejning
+COLLECT_SPEED   = 50    # % ved opsamling
+COLLECT_TIME_S  = 1.5   # sekunder opsamlingsmekanisme koerer
+POSITION_TOL_MM = 40    # acceptabel afstand til waypoint
 
 # ─────────────────────────────────────────────
-# BEVÆGELSE
+# MOTORER
 # ─────────────────────────────────────────────
 
-def mm_to_degrees(mm):
-    """Omregn mm til hjulgrader."""
-    circumference = math.pi * WHEEL_DIAM_MM
-    return (mm / circumference) * 360
+motor_right  = LargeMotor(OUTPUT_A)
+motor_left   = LargeMotor(OUTPUT_D)
+motor_collect = LargeMotor(OUTPUT_C)
+motor_right.polarity = "inversed"
+motor_left.polarity  = "inversed"
 
-def turn_to_heading(target_heading_deg):
-    """Drej på stedet til en given kompas-retning (0=højre, 90=op)."""
-    current = gyro.angle
-    # Konverter fra vores kompas (0=højre, CCW positiv)
-    # til gyro (0=start, CW positiv)
-    # Gyro-vinkel stiger ved højresving
-    diff = target_heading_deg - current
-    # Normaliser til [-180, 180]
-    diff = (diff + 180) % 360 - 180
+def motors_stop():
+    motor_right.off()
+    motor_left.off()
 
-    if abs(diff) < ANGLE_TOL_DEG:
+def mm_to_rotations(mm):
+    return mm / (math.pi * WHEEL_DIAM_MM)
+
+def degrees_to_rotations(angle_deg):
+    """Rotationer per hjul for at dreje angle_deg grader paa stedet."""
+    arc = (abs(angle_deg) / 360.0) * math.pi * WHEEL_BASE_MM
+    return arc / (math.pi * WHEEL_DIAM_MM)
+
+def drive_straight(distance_mm):
+    """Koer ligeud (negativ = bakke)."""
+    rot = mm_to_rotations(abs(distance_mm))
+    sp  = DRIVE_SPEED if distance_mm >= 0 else -DRIVE_SPEED
+    motor_right.on_for_rotations(SpeedPercent(sp),  rot, block=False)
+    motor_left.on_for_rotations( SpeedPercent(sp),  rot, block=True)
+    motors_stop()
+
+def turn_degrees(angle_deg):
+    """
+    Drej paa stedet.
+    Positiv = mod uret (venstre), negativ = med uret (hojre).
+    """
+    if abs(angle_deg) < 3:
         return
+    rot = degrees_to_rotations(angle_deg)
+    sp  = TURN_SPEED
+    if angle_deg > 0:   # venstre
+        motor_right.on_for_rotations(SpeedPercent( sp), rot, block=False)
+        motor_left.on_for_rotations( SpeedPercent(-sp), rot, block=True)
+    else:               # hojre
+        motor_right.on_for_rotations(SpeedPercent(-sp), rot, block=False)
+        motor_left.on_for_rotations( SpeedPercent( sp), rot, block=True)
+    motors_stop()
 
-    # Positiv diff = sving mod uret (venstre) i vores system
-    steering = -100 if diff > 0 else 100
-    rotations = abs(diff) / 360 * (math.pi * WHEEL_BASE_MM / (WHEEL_DIAM_MM * math.pi))
-    steer.on_for_rotations(steering, SpeedPercent(TURN_SPEED), rotations)
+def collect():
+    """Koer opsamlingsmekanismen i COLLECT_TIME_S sekunder."""
+    import time
+    motor_collect.on(SpeedPercent(COLLECT_SPEED))
+    time.sleep(COLLECT_TIME_S)
+    motor_collect.off()
 
-def drive_straight_mm(distance_mm):
-    """Kør ligeud distance_mm (negativ = bakke)."""
-    deg = mm_to_degrees(abs(distance_mm))
-    rotations = deg / 360
-    direction = 1 if distance_mm >= 0 else -1
-    steer.on_for_rotations(0, SpeedPercent(DRIVE_SPEED * direction), rotations)
+# ─────────────────────────────────────────────
+# NAVIGATION  (uden gyro - bruger heading fra vision)
+# ─────────────────────────────────────────────
 
-def go_to_waypoint(robot_pos_mm, robot_heading_deg, target_mm):
+current_heading = 0.0   # holdes ajour lokalt mellem waypoints
+
+def go_to_waypoint(robot_pos, heading_deg, target):
     """
-    Drej mod target og kør dertil.
-    robot_pos_mm     : (x, y) aktuel position i mm
-    robot_heading_deg: aktuel retning (0=højre, 90=op)
-    target_mm        : (x, y) destination i mm
+    Beregn retning og afstand til target, drej og koer.
+    robot_pos / target : (x_mm, y_mm)
+    heading_deg        : nuvaerende retning (0=hoejre, 90=op)
+    Returnerer ny heading.
     """
-    dx = target_mm[0] - robot_pos_mm[0]
-    dy = target_mm[1] - robot_pos_mm[1]
+    global current_heading
+    dx = target[0] - robot_pos[0]
+    dy = target[1] - robot_pos[1]
     dist = math.hypot(dx, dy)
 
     if dist < POSITION_TOL_MM:
-        return   # allerede fremme
+        return heading_deg
 
-    # Ønsket retning (0=højre, 90=op — samme som heading-systemet)
-    desired_heading = math.degrees(math.atan2(dy, dx))
+    desired = math.degrees(math.atan2(dy, dx))
+    diff    = desired - heading_deg
+    # Normaliser til [-180, 180]
+    diff = (diff + 180) % 360 - 180
 
-    turn_to_heading(desired_heading)
-    drive_straight_mm(dist)
+    turn_degrees(diff)
+    drive_straight(dist)
+
+    return desired
 
 # ─────────────────────────────────────────────
-# KOMMANDO-HÅNDTERING
+# KOMMANDO-HAANDTERING
 # ─────────────────────────────────────────────
 
-def handle_command(cmd: dict):
-    """
-    Kommandoformat fra PC:
-      {"type": "waypoints",
-       "waypoints": [[x1,y1], [x2,y2], ...],
-       "robot_pos": [x, y],
-       "heading": 45.0}
-
-      {"type": "stop"}
-      {"type": "ping"}
-    """
+def handle_command(cmd):
     t = cmd.get("type")
 
     if t == "ping":
         return {"status": "pong"}
 
     if t == "stop":
-        steer.off()
+        motors_stop()
         return {"status": "stopped"}
+
+    if t == "collect":
+        collect()
+        return {"status": "collected"}
 
     if t == "waypoints":
         waypoints   = cmd["waypoints"]
         robot_pos   = tuple(cmd["robot_pos"])
         heading     = cmd.get("heading", 0.0)
+        do_collect  = cmd.get("collect_at_each", False)
         current_pos = robot_pos
 
-        reset_gyro()
-
-        for wp in waypoints:
+        for i, wp in enumerate(waypoints):
             target = tuple(wp)
-            print(f"  → waypoint {target}")
-            go_to_waypoint(current_pos, heading, target)
+            print("  -> waypoint {} af {} : {}".format(i+1, len(waypoints), target))
+            heading = go_to_waypoint(current_pos, heading, target)
             current_pos = target
-            # Send acknowledgement after each waypoint so PC can update vision
-            # (socket stays open — PC can send next batch after each ACK)
 
-        return {"status": "done", "final_pos": list(current_pos)}
+            # Opsaml hvis waypoint er markeret som bold-position
+            if do_collect and cmd.get("collect_indices") and i in cmd["collect_indices"]:
+                collect()
 
-    return {"status": "unknown_command"}
+        return {"status": "done", "final_pos": list(current_pos), "heading": heading}
+
+    return {"status": "unknown"}
 
 # ─────────────────────────────────────────────
-# SERVER
+# TCP SERVER
 # ─────────────────────────────────────────────
 
 def main():
-    print(f"EV3 robot server lytter på port {PORT}...")
+    print("EV3 server klar paa port {}".format(PORT))
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((HOST, PORT))
@@ -156,17 +166,16 @@ def main():
 
     while True:
         conn, addr = srv.accept()
-        print(f"Forbundet: {addr}")
+        print("Forbundet fra {}".format(addr))
+        buf = b""
         try:
-            data = b""
             while True:
                 chunk = conn.recv(4096)
                 if not chunk:
                     break
-                data += chunk
-                # Kommandoer er newline-separerede JSON
-                while b"\n" in data:
-                    line, data = data.split(b"\n", 1)
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
                     if not line.strip():
                         continue
                     try:
@@ -174,7 +183,7 @@ def main():
                         resp = handle_command(cmd)
                         conn.sendall((json.dumps(resp) + "\n").encode())
                     except Exception as e:
-                        print(f"Fejl: {e}")
+                        print("Fejl: {}".format(e))
                         conn.sendall((json.dumps({"status":"error","msg":str(e)})+"\n").encode())
         finally:
             conn.close()

@@ -39,7 +39,7 @@ robot.connect()
 # KONFIGURATION
 # ════════════════════════════════════════════════════════════════════════════
 
-CAMERA_INDEX = 0
+CAMERA_INDEX = 1
 SMOOTH_ALPHA = 0.80
 DISPLAY_SCALE = 0.5
 
@@ -197,7 +197,7 @@ def _make_camera_matrix(w, h):
 def _rvec_to_heading(rvec):
     R, _ = cv2.Rodrigues(rvec)
     dx, dy = R[0, 0], R[1, 0]
-    return math.degrees(math.atan2(-dy, dx))
+    return math.degrees(math.atan2(-dy, dx)) + 90
 
 
 def _heading_cardinal(a):
@@ -677,6 +677,9 @@ while True:
         print(f"  Orange bolde: {len(last_oranges_px)}")
         print(f"  Rute waypoints: {len(last_route_mm)}")
         print("══════════════════════════════════\n")
+    elif key == ord("s"):
+        print("Stopper robotten")
+        robot.stop()
 
     elif key == 27:
         break
