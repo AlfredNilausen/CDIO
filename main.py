@@ -376,7 +376,7 @@ def plan_route(white_mm, orange_mm, start_mm, cross_mm):
         if q != cur_q:
             entry = _entry_point_for_quadrant(q, cross_mm)
             for wp in _detour(current, entry, cross_mm):
-                route.append(wp); current = wp
+                route.append((wp[0], wp[1], False)); current = wp
             cur_q = q
 
         pts     = [p for _, p in quads[q]]
@@ -388,16 +388,16 @@ def plan_route(white_mm, orange_mm, start_mm, cross_mm):
 
             if wall_ap is not None:
                 for wp in _detour(current, wall_ap, cross_mm):
-                    route.append(wp); current = wp
-                route.append(nxt);     current = nxt
-                route.append(wall_ex); current = wall_ex
+                    route.append((wp[0], wp[1], False)); current = wp
+                route.append((nxt[0], nxt[1], True));                 current = nxt
+                route.append((wall_ex[0], wall_ex[1], False));        current = wall_ex
             else:
                 for wp in cross_ap:
                     for ww in _detour(current, wp, cross_mm):
-                        route.append(ww); current = ww
-                route.append(nxt); current = nxt
+                        route.append((ww[0], ww[1], False)); current = ww
+                route.append((nxt[0], nxt[1], True)); current = nxt
                 for wp in cross_ex:
-                    route.append(wp); current = wp
+                    route.append((wp[0], wp[1], False)); current = wp
 
     return route
 
@@ -405,7 +405,7 @@ def plan_route(white_mm, orange_mm, start_mm, cross_mm):
 def draw_route_world(world_img, route_mm, start_mm, scale=DISPLAY_SCALE):
     if not route_mm:
         return
-    pts_view = [world_to_view(p, scale) for p in [start_mm] + list(route_mm)]
+    pts_view = [world_to_view(start_mm, scale)] + [world_to_view((p[0], p[1]), scale) for p in route_mm]
     for i in range(len(pts_view)-1):
         p1, p2 = pts_view[i], pts_view[i+1]
         cv2.line(world_img, p1, p2, (0,255,0), 2)
@@ -519,10 +519,12 @@ def robot_executor():
             robot_stop_req.clear()
             print("[robot] Stoppet")
             continue
-        pos     = robot_pos_live[0] or start_mm
-        heading = robot_head_live[0] or (last_dir_info.get("heading") or 0.0)
-        print("[robot] -> {}".format(wp))
-        resp = robot.send_waypoint(wp, pos, heading)
+        pos        = robot_pos_live[0] or start_mm
+        heading    = robot_head_live[0] or (last_dir_info.get("heading") or 0.0)
+        wp_pos     = (wp[0], wp[1])
+        do_collect = wp[2] if len(wp) > 2 else False
+        print("[robot] -> {}  collect={}".format(wp_pos, do_collect))
+        resp = robot.send_waypoint(wp_pos, pos, heading, do_collect=do_collect)
         if resp is None:
             print("[robot] Ingen svar - stopper")
             robot_running.clear()

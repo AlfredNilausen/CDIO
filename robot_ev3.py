@@ -27,11 +27,13 @@ PORT            = 9999
 WHEEL_BASE_MM   = 120
 WHEEL_DIAM_MM   = 56
 
-DRIVE_SPEED     = 30
-TURN_SPEED      = 20
-COLLECT_SPEED   = 50
-COLLECT_TIME_S  = 1.5
-POSITION_TOL_MM = 40
+DRIVE_SPEED        = 30
+TURN_SPEED         = 20
+COLLECT_SPEED      = 50
+COLLECT_TIME_S     = 1.5
+POSITION_TOL_MM    = 40
+APPROACH_OFFSET_MM = 150   # stop this far short of a ball when collecting
+TURN_STEP_DEG      = 5     # max degrees per turn increment
 
 # ─────────────────────────────────────────────
 # MOTORER + KNAPPER
@@ -98,23 +100,35 @@ def drive(mm):
     check_stop()
     rot = mm_to_rotations(abs(mm))
     sp  = DRIVE_SPEED if mm > 0 else -DRIVE_SPEED
+    motor_collect.on(SpeedPercent(COLLECT_SPEED))
     motor_right.on_for_rotations(SpeedPercent(sp), rot, block=False)
     motor_left.on_for_rotations( SpeedPercent(sp), rot, block=True)
     motor_right.off(); motor_left.off()
+    motor_collect.off()
 
 def turn(degrees):
     check_stop()
-    if abs(degrees) < 3:
+    if abs(degrees) < 2:
         return
-    arc = (abs(degrees) / 360.0) * math.pi * WHEEL_BASE_MM
-    rot = arc / (math.pi * WHEEL_DIAM_MM)
-    if degrees > 0:
-        motor_right.on_for_rotations(SpeedPercent( TURN_SPEED), rot, block=False)
-        motor_left.on_for_rotations( SpeedPercent(-TURN_SPEED), rot, block=True)
-    else:
-        motor_right.on_for_rotations(SpeedPercent(-TURN_SPEED), rot, block=False)
-        motor_left.on_for_rotations( SpeedPercent( TURN_SPEED), rot, block=True)
-    motor_right.off(); motor_left.off()
+    sign       = 1 if degrees > 0 else -1
+    target_rot = (abs(degrees) / 360.0) * math.pi * WHEEL_BASE_MM / (math.pi * WHEEL_DIAM_MM)
+    step_rot   = (TURN_STEP_DEG / 360.0) * math.pi * WHEEL_BASE_MM / (math.pi * WHEEL_DIAM_MM)
+    pos0_r     = motor_right.position
+    pos0_l     = motor_left.position
+    while True:
+        actual_rot = (abs(motor_right.position - pos0_r) + abs(motor_left.position - pos0_l)) / 2.0 / 360.0
+        remaining  = target_rot - actual_rot
+        if remaining <= 0.001:
+            break
+        this_rot = min(step_rot, remaining)
+        if sign > 0:
+            motor_right.on_for_rotations(SpeedPercent( TURN_SPEED), this_rot, block=False)
+            motor_left.on_for_rotations( SpeedPercent(-TURN_SPEED), this_rot, block=True)
+        else:
+            motor_right.on_for_rotations(SpeedPercent(-TURN_SPEED), this_rot, block=False)
+            motor_left.on_for_rotations( SpeedPercent( TURN_SPEED), this_rot, block=True)
+        motor_right.off(); motor_left.off()
+        time.sleep(0.05)
 
 def collect_forward():
     check_stop()
@@ -127,16 +141,17 @@ def collect_reverse():
     time.sleep(COLLECT_TIME_S)
     motor_collect.off()
 
-def go_to(robot_pos, heading_deg, target):
+def go_to(robot_pos, heading_deg, target, collecting=False):
     dx   = target[0] - robot_pos[0]
     dy   = target[1] - robot_pos[1]
     dist = math.hypot(dx, dy)
-    if dist < POSITION_TOL_MM:
+    drive_dist = max(0.0, dist - APPROACH_OFFSET_MM) if collecting else dist
+    if drive_dist < POSITION_TOL_MM:
         return target, heading_deg
     desired = math.degrees(math.atan2(dy, dx))
     diff    = (desired - heading_deg + 180) % 360 - 180
     turn(diff)
-    drive(dist)
+    drive(drive_dist)
     return target, desired
 
 # ─────────────────────────────────────────────
@@ -177,13 +192,11 @@ def handle(cmd):
         do_collect = cmd.get("collect", False)
         do_eject   = cmd.get("eject",   False)
 
-        new_pos, new_heading = go_to(robot_pos, heading, target)
+        new_pos, new_heading = go_to(robot_pos, heading, target, collecting=do_collect)
 
         if stop_flag.is_set():
             return {"status": "stopped", "pos": list(new_pos), "heading": new_heading}
 
-        if do_collect:
-            collect_forward()
         if do_eject:
             collect_reverse()
 
