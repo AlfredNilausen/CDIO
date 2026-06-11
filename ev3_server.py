@@ -11,8 +11,8 @@ import time
 import threading
 from ev3dev2.motor import LargeMotor, MediumMotor, OUTPUT_A, OUTPUT_C, OUTPUT_D, SpeedPercent
 
-SPEED = 50
-SPEED_COLLECTOR = 40
+SPEED = 30
+SPEED_COLLECTOR = 30
 PORT  = 5555
 
 try:
@@ -39,10 +39,10 @@ except Exception as e:
 
 def forward():       motor_left.on(SpeedPercent( SPEED)); motor_right.on(SpeedPercent( SPEED))
 def backward():      motor_left.on(SpeedPercent(-SPEED)); motor_right.on(SpeedPercent(-SPEED))
-def left():          motor_left.on(SpeedPercent(-SPEED)); motor_right.on(SpeedPercent( SPEED))
-def right():         motor_left.on(SpeedPercent( SPEED)); motor_right.on(SpeedPercent(-SPEED))
+def left():          motor_left.on(SpeedPercent(-(SPEED))); motor_right.on(SpeedPercent( SPEED))
+def right():         motor_right.on(SpeedPercent(-(SPEED))); motor_left.on(SpeedPercent( SPEED))
 def stop():          motor_left.off(); motor_right.off()
-def motor_c_rev():   motor_c.on(SpeedPercent(-SPEED_COLLECTOR))
+def motor_c_rev():   motor_c.on(SpeedPercent(-(SPEED_COLLECTOR)))
 def motor_c_norm():  motor_c.on(SpeedPercent( SPEED_COLLECTOR))
 
 _unjamming = False
