@@ -35,6 +35,11 @@ POSITION_TOL_MM    = 40
 APPROACH_OFFSET_MM = 150   # stop this far short of a ball when collecting
 TURN_STEP_DEG      = 5     # max degrees per turn increment
 
+BOARD_WIDTH_MM     = 1680  # must match homography.py on PC
+BOARD_HEIGHT_MM    = 1235
+EDGE_MARGIN_MM     = 100   # reverse if estimated position is within this of any wall
+EDGE_REVERSE_MM    = 150   # how far to back up when edge is detected
+
 # ─────────────────────────────────────────────
 # MOTORER + KNAPPER
 # ─────────────────────────────────────────────
@@ -141,7 +146,21 @@ def collect_reverse():
     time.sleep(COLLECT_TIME_S)
     motor_collect.off()
 
+def _clamp_to_board(pos):
+    m = EDGE_MARGIN_MM
+    return (max(m, min(BOARD_WIDTH_MM - m, pos[0])),
+            max(m, min(BOARD_HEIGHT_MM - m, pos[1])))
+
+def _near_edge(pos):
+    m = EDGE_MARGIN_MM
+    x, y = pos
+    return (x < m or x > BOARD_WIDTH_MM - m or
+            y < m or y > BOARD_HEIGHT_MM - m)
+
 def go_to(robot_pos, heading_deg, target, collecting=False):
+    # Clamp target to safe zone so robot never aims at a wall
+    target = _clamp_to_board(target)
+
     dx   = target[0] - robot_pos[0]
     dy   = target[1] - robot_pos[1]
     dist = math.hypot(dx, dy)
@@ -152,7 +171,19 @@ def go_to(robot_pos, heading_deg, target, collecting=False):
     diff    = (desired - heading_deg + 180) % 360 - 180
     turn(diff)
     drive(drive_dist)
-    return target, desired
+
+    # Estimate where the robot actually ended up
+    ratio = (drive_dist / dist) if dist > 0 else 0.0
+    est   = (robot_pos[0] + dx * ratio, robot_pos[1] + dy * ratio)
+
+    # If too close to a wall, reverse along current heading to clear it
+    if _near_edge(est):
+        print("[edge] Naer kant - bakker {}mm".format(EDGE_REVERSE_MM))
+        drive(-EDGE_REVERSE_MM)
+        est = (est[0] - EDGE_REVERSE_MM * math.cos(math.radians(desired)),
+               est[1] - EDGE_REVERSE_MM * math.sin(math.radians(desired)))
+
+    return est, desired
 
 # ─────────────────────────────────────────────
 # KOMMANDOER
