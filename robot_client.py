@@ -1,50 +1,34 @@
 """
-robot_client.py  —  kører på PC
+robot_client.py  -  korer paa PC
 
-Sender waypoints fra main.py til EV3'en via TCP socket.
-Importer denne i main.py og kald send_route().
-
-Bluetooth-netværk:
-  - Forbind EV3 til PC via Bluetooth
-  - ev3dev opretter automatisk et netværksinterface (bnep0 eller lignende)
-  - Standard EV3 IP over BT:  10.42.0.2  (eller se via: ssh robot@ev3dev.local)
-  - Standard EV3 IP over USB: 192.168.0.1
+Send ET waypoint ad gangen og vent paa ACK.
+Giver main.py mulighed for at genberegne ruten efter hvert stop.
 """
 
 import socket
 import json
-import threading
-import time
 
-# ─────────────────────────────────────────────
-# KONFIGURATION
-# ─────────────────────────────────────────────
-
-EV3_HOST = "192.168.0.1"    # ← skift til din EV3's IP
-                           #   BT:  10.42.0.2  (typisk)
-                           #   USB: 192.168.0.1
+EV3_HOST = "192.168.0.1"
 EV3_PORT = 9999
-TIMEOUT  = 10              # sekunder
-
+TIMEOUT  = 30   # sekunder - lang nok til at robotten kan koere
 
 class RobotClient:
     def __init__(self, host=EV3_HOST, port=EV3_PORT):
-        self.host    = host
-        self.port    = port
-        self.sock    = None
+        self.host      = host
+        self.port      = port
+        self.sock      = None
         self.connected = False
 
     def connect(self):
-        """Opret forbindelse til EV3. Returnerer True hvis OK."""
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.settimeout(TIMEOUT)
             self.sock.connect((self.host, self.port))
             self.connected = True
-            print(f"[robot] Forbundet til EV3 på {self.host}:{self.port}")
+            print("[robot] Forbundet til {}:{}".format(self.host, self.port))
             return True
         except Exception as e:
-            print(f"[robot] Kunne ikke forbinde: {e}")
+            print("[robot] Kunne ikke forbinde: {}".format(e))
             self.connected = False
             return False
 
@@ -54,86 +38,56 @@ class RobotClient:
             self.sock = None
         self.connected = False
 
-    def _send(self, cmd: dict) -> dict | None:
-        """Send én kommando og vent på svar."""
+    def _send(self, cmd):
         if not self.connected:
-            print("[robot] Ikke forbundet")
             return None
         try:
-            msg = (json.dumps(cmd) + "\n").encode()
-            self.sock.sendall(msg)
-            # Læs svar (newline-termineret JSON)
+            self.sock.sendall((json.dumps(cmd) + "\n").encode())
             buf = b""
             while b"\n" not in buf:
                 chunk = self.sock.recv(1024)
                 if not chunk:
                     break
                 buf += chunk
-            resp = json.loads(buf.split(b"\n")[0].decode())
-            return resp
+            return json.loads(buf.split(b"\n")[0].decode())
         except Exception as e:
-            print(f"[robot] Send-fejl: {e}")
+            print("[robot] Fejl: {}".format(e))
             self.connected = False
             return None
 
-    def ping(self) -> bool:
-        resp = self._send({"type": "ping"})
-        return resp is not None and resp.get("status") == "pong"
+    def ping(self):
+        r = self._send({"type": "ping"})
+        return r is not None and r.get("status") == "pong"
 
     def stop(self):
         self._send({"type": "stop"})
 
-    def send_route(self, waypoints_mm: list, robot_pos_mm: tuple,
-                   heading_deg: float) -> bool:
+    def resume(self):
+        self._send({"type": "resume"})
+
+    def collect(self):
+        return self._send({"type": "collect"})
+
+    def eject(self):
+        return self._send({"type": "eject"})
+
+    def send_waypoint(self, target_mm, robot_pos_mm, heading_deg, do_collect=False):
         """
-        Send en liste waypoints til EV3.
-
-        waypoints_mm : liste af (x_mm, y_mm) tupler
-        robot_pos_mm : aktuel robot-position (x_mm, y_mm)
-        heading_deg  : aktuel robot-retning i grader (0=højre, 90=op)
-
-        Returnerer True når EV3 melder "done".
+        Send ET waypoint. Blokerer til robotten melder 'arrived' eller 'stopped'.
+        Returnerer dict: {"status": ..., "pos": [...], "heading": ...}
         """
-        if not waypoints_mm:
-            return True
-
         cmd = {
-            "type":      "waypoints",
-            "waypoints": [[float(x), float(y)] for x,y in waypoints_mm],
-            "robot_pos": [float(robot_pos_mm[0]), float(robot_pos_mm[1])],
-            "heading":   float(heading_deg),
+            "type":    "goto",
+            "target":  [float(target_mm[0]),    float(target_mm[1])],
+            "pos":     [float(robot_pos_mm[0]),  float(robot_pos_mm[1])],
+            "heading": float(heading_deg),
+            "collect": do_collect,
         }
+        print("[robot] Sender waypoint {}".format(target_mm))
+        return self._send(cmd)
 
-        print(f"[robot] Sender {len(waypoints_mm)} waypoints...")
-        resp = self._send(cmd)
-
-        if resp and resp.get("status") == "done":
-            print(f"[robot] Rute færdig. Slutposition: {resp.get('final_pos')}")
-            return True
-        else:
-            print(f"[robot] Uventet svar: {resp}")
-            return False
-
-
-# ─────────────────────────────────────────────
-# Singleton der bruges fra main.py
-# ─────────────────────────────────────────────
 
 _client = RobotClient()
 
-def get_client() -> RobotClient:
+def get_client():
     return _client
-
-
-# ─────────────────────────────────────────────
-# Hurtig test (kør denne fil direkte)
-# ─────────────────────────────────────────────
-
-if __name__ == "__main__":
-    c = RobotClient()
-    if c.connect():
-        print("Ping:", c.ping())
-        # Test-rute: kør en lille firkant
-        test_route = [(200,200),(400,200),(400,400),(200,400),(200,200)]
-        c.send_route(test_route, robot_pos_mm=(200,200), heading_deg=0)
-        c.disconnect()
