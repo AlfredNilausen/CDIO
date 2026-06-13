@@ -27,7 +27,7 @@ PORT            = 9999
 WHEEL_BASE_MM   = 120
 WHEEL_DIAM_MM   = 56
 
-DRIVE_SPEED        = 30
+DRIVE_SPEED        = 20
 TURN_SPEED         = 20
 COLLECT_SPEED      = 50
 COLLECT_TIME_S     = 1.5
@@ -37,8 +37,8 @@ TURN_STEP_DEG      = 5     # max degrees per turn increment
 
 BOARD_WIDTH_MM     = 1680  # must match homography.py on PC
 BOARD_HEIGHT_MM    = 1235
-EDGE_MARGIN_MM     = 100   # reverse if estimated position is within this of any wall
-EDGE_REVERSE_MM    = 150   # how far to back up when edge is detected
+EDGE_MARGIN_MM     = 200   # reverse if estimated position is within this of any wall
+EDGE_REVERSE_MM    = 200   # how far to back up when edge is detected
 
 # ─────────────────────────────────────────────
 # MOTORER + KNAPPER
@@ -104,10 +104,11 @@ def mm_to_rotations(mm):
 def drive(mm):
     check_stop()
     rot = mm_to_rotations(abs(mm))
+    # With both motors polarity=inversed: SpeedPercent(+) = forward, SpeedPercent(-) = backward
     sp  = DRIVE_SPEED if mm > 0 else -DRIVE_SPEED
     motor_collect.on(SpeedPercent(COLLECT_SPEED))
-    motor_right.on_for_rotations(SpeedPercent(sp), rot, block=False)
-    motor_left.on_for_rotations( SpeedPercent(sp), rot, block=True)
+    motor_right.on_for_rotations(SpeedPercent( sp), rot, block=False)
+    motor_left.on_for_rotations( SpeedPercent( sp), rot, block=True)
     motor_right.off(); motor_left.off()
     motor_collect.off()
 
@@ -118,14 +119,10 @@ def turn(degrees):
     sign       = 1 if degrees > 0 else -1
     target_rot = (abs(degrees) / 360.0) * math.pi * WHEEL_BASE_MM / (math.pi * WHEEL_DIAM_MM)
     step_rot   = (TURN_STEP_DEG / 360.0) * math.pi * WHEEL_BASE_MM / (math.pi * WHEEL_DIAM_MM)
-    pos0_r     = motor_right.position
-    pos0_l     = motor_left.position
-    while True:
-        actual_rot = (abs(motor_right.position - pos0_r) + abs(motor_left.position - pos0_l)) / 2.0 / 360.0
-        remaining  = target_rot - actual_rot
-        if remaining <= 0.001:
-            break
-        this_rot = min(step_rot, remaining)
+    # Track commanded rotations instead of encoder to avoid overshoot false-exit
+    done_rot   = 0.0
+    while done_rot < target_rot - 0.001:
+        this_rot = min(step_rot, target_rot - done_rot)
         if sign > 0:
             motor_right.on_for_rotations(SpeedPercent( TURN_SPEED), this_rot, block=False)
             motor_left.on_for_rotations( SpeedPercent(-TURN_SPEED), this_rot, block=True)
@@ -133,6 +130,7 @@ def turn(degrees):
             motor_right.on_for_rotations(SpeedPercent(-TURN_SPEED), this_rot, block=False)
             motor_left.on_for_rotations( SpeedPercent( TURN_SPEED), this_rot, block=True)
         motor_right.off(); motor_left.off()
+        done_rot += this_rot
         time.sleep(0.05)
 
 def collect_forward():

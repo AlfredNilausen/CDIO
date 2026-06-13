@@ -8,7 +8,7 @@ Giver main.py mulighed for at genberegne ruten efter hvert stop.
 import socket
 import json
 
-EV3_HOST = "192.168.0.1"
+EV3_HOST = "192.168.137.3"
 EV3_PORT = 9999
 TIMEOUT  = 30   # sekunder - lang nok til at robotten kan koere
 

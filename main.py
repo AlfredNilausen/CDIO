@@ -45,15 +45,16 @@ SMOOTH_ALPHA   = 0.80
 DISPLAY_SCALE  = 0.5
 
 # ArUco
-ARUCO_DICT     = aruco.DICT_4X4_50
+ARUCO_DICT      = aruco.DICT_4X4_50
 ROBOT_MARKER_ID = 0
+HEADING_OFFSET_DEG = -90   # adjust until the arrow in the world view matches the robot's front
 MARKER_SIZE_MM = 80          # fysisk størrelse af printet marker i mm
 
 # Rute
 CENTER_EXCLUSION_MM = 150    # eksklusionszone rundt om krydset (mm)
 GATE_OFFSET_MM      = 320    # indgangspunkt afstand fra krydset (mm) - større = robotten svinger mere udenom
-WALL_MARGIN_MM      = 180    # bold inden for dette fra kanten behandles som kantbold
-WALL_APPROACH_MM    = 250    # start tilkørsel denne afstand fra bolden (vinkelret på kant)
+WALL_MARGIN_MM      = 300    # bold inden for dette fra kanten behandles som kantbold
+WALL_APPROACH_MM    = 400    # start tilkørsel denne afstand fra bolden (vinkelret på kant)
 
 # ════════════════════════════════════════════════════════════════════════════
 # BOLD-DETEKTION  (fra samlet.py)
@@ -191,7 +192,7 @@ def _make_camera_matrix(w, h):
 def _rvec_to_heading(rvec):
     R, _ = cv2.Rodrigues(rvec)
     dx, dy = R[0,0], R[1,0]
-    return math.degrees(math.atan2(-dy, dx)) -90
+    return math.degrees(math.atan2(-dy, dx)) + HEADING_OFFSET_DEG
 
 def _heading_cardinal(a):
     a = a % 360
@@ -357,47 +358,25 @@ def _wall_approach(ball_mm):
     return None, None
 
 def plan_route(white_mm, orange_mm, start_mm, cross_mm):
-    all_balls = [("white",p) for p in white_mm] + [("orange",p) for p in orange_mm]
-    quads = {q: [] for q in [1,2,3,4]}
-    for kind, p in all_balls:
-        quads[_quadrant(p, cross_mm)].append((kind, p))
-    for q in quads:
-        quads[q] = sorted(quads[q], key=lambda x: 0 if x[0]=="white" else 1)
+    # White balls first via nearest-neighbour, orange ball(s) last
+    white_rem  = list(white_mm)
+    orange_rem = list(orange_mm)
+    route      = []
+    current    = start_mm
 
-    route   = []
-    current = start_mm
-    cur_q   = _quadrant(current, cross_mm)
+    for group in [white_rem, orange_rem]:
+        while group:
+            nxt = min(group, key=lambda p: _dist(current, p))
+            group.remove(nxt)
 
-    for q in [1, 2, 3, 4]:
-        if not quads[q]:
-            continue
+            # Only detour if direct path clips the cross exclusion zone
+            for wp in _detour(current, nxt, cross_mm):
+                if wp != nxt:
+                    route.append((wp[0], wp[1], False))
+                    current = wp
 
-        # Skift kvadrant
-        if q != cur_q:
-            entry = _entry_point_for_quadrant(q, cross_mm)
-            for wp in _detour(current, entry, cross_mm):
-                route.append((wp[0], wp[1], False)); current = wp
-            cur_q = q
-
-        pts     = [p for _, p in quads[q]]
-        ordered = _nearest_neighbor(current, pts)
-
-        for nxt in ordered:
-            wall_ap, wall_ex = _wall_approach(nxt)
-            cross_ap, cross_ex = _approach_exit(nxt, cross_mm)
-
-            if wall_ap is not None:
-                for wp in _detour(current, wall_ap, cross_mm):
-                    route.append((wp[0], wp[1], False)); current = wp
-                route.append((nxt[0], nxt[1], True));                 current = nxt
-                route.append((wall_ex[0], wall_ex[1], False));        current = wall_ex
-            else:
-                for wp in cross_ap:
-                    for ww in _detour(current, wp, cross_mm):
-                        route.append((ww[0], ww[1], False)); current = ww
-                route.append((nxt[0], nxt[1], True)); current = nxt
-                for wp in cross_ex:
-                    route.append((wp[0], wp[1], False)); current = wp
+            route.append((nxt[0], nxt[1], True))
+            current = nxt
 
     return route
 
@@ -519,8 +498,9 @@ def robot_executor():
             robot_stop_req.clear()
             print("[robot] Stoppet")
             continue
-        pos        = robot_pos_live[0] or start_mm
-        heading    = robot_head_live[0] or (last_dir_info.get("heading") or 0.0)
+        # Prefer live ArUco position over EV3 dead-reckoning
+        pos     = start_mm if robot_pos_live[0] is None else robot_pos_live[0]
+        heading = last_dir_info.get("heading") or robot_head_live[0] or 0.0
         wp_pos     = (wp[0], wp[1])
         do_collect = wp[2] if len(wp) > 2 else False
         print("[robot] -> {}  collect={}".format(wp_pos, do_collect))
@@ -534,16 +514,25 @@ def robot_executor():
         if status == "arrived":
             robot_pos_live[0]  = tuple(resp["pos"])
             robot_head_live[0] = resp["heading"]
-            if last_H_px_world is not None and last_cross_info is not None:
+            # Only recalculate when the planned route is fully exhausted.
+            # Recalculating after every waypoint causes an infinite loop because
+            # the camera still sees the ball the robot just visited.
+            with route_lock:
+                route_empty = len(current_route) == 0
+            if route_empty and last_H_px_world is not None and last_cross_info is not None:
+                time.sleep(1.0)   # let camera settle before checking for remaining balls
                 cross_mm = last_cross_info["center_mm"]
                 cur_pos  = robot_pos_live[0]
                 w_mm = [pixel_to_world((x,y), last_H_px_world) for (x,y,r) in last_whites_px]
                 o_mm = [pixel_to_world((x,y), last_H_px_world) for (x,y,r) in last_oranges_px]
                 new_route = plan_route(w_mm, o_mm, cur_pos, cross_mm)
                 with route_lock:
-                    current_route.clear()
                     current_route.extend(new_route)
-                print("[robot] Rute genberegnet: {} wp".format(len(new_route)))
+                if new_route:
+                    print("[robot] Bolde tilbage: genberegnet {} wp".format(len(new_route)))
+                else:
+                    print("[robot] Alle bolde indsamlet!")
+                    robot_running.clear()
         elif status == "stopped":
             robot_running.clear()
 
