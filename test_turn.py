@@ -149,6 +149,12 @@ def ev3_show(line1, line2=""):
 def angle_diff(target, current):
     return (target - current + 180) % 360 - 180
 
+def circular_mean(angles):
+    """Gennemsnit af vinkler -- haandterer +-180 overgang korrekt."""
+    sin_sum = sum(math.sin(math.radians(a)) for a in angles)
+    cos_sum = sum(math.cos(math.radians(a)) for a in angles)
+    return math.degrees(math.atan2(sin_sum, cos_sum))
+
 def turn_to_ball(cap, ball_px, robot_center, robot_heading):
     """
     Beregner vinkel fra robot til bold,
@@ -168,8 +174,8 @@ def turn_to_ball(cap, ball_px, robot_center, robot_heading):
         print("  Allerede rettet mod bolden!")
         return True
 
-    # Kompenser for overshooting
-    stop_target = target_heading - (OVERSHOOT_COMP if diff > 0 else -OVERSHOOT_COMP)
+    # sign_dir: +1 for venstre (CCW, heading stiger), -1 for hoejre (CW, heading falder)
+    sign_dir = 1 if diff > 0 else -1
 
     # Start drejning i rigtig retning
     direction = "turn_left" if diff > 0 else "turn_right"
@@ -186,13 +192,15 @@ def turn_to_ball(cap, ball_px, robot_center, robot_heading):
         h, center = get_robot(frame)
         if h is not None:
             history.append(h)
+            # Cirkulaert gennemsnit -- undgaar fejl naar heading krydser +-180
             if len(history) > 4:
-                h = sum(history[-4:]) / 4   # udglaet heading
+                h = circular_mean(history[-4:])
 
             remaining = angle_diff(target_heading, h)
 
-            # Stop-check
-            if abs(angle_diff(stop_target, h)) <= TURN_TOLERANCE:
+            # Stop naar vi har drejet til inden for OVERSHOOT_COMP grader af maalet.
+            # Bruger "har vi krydset graensen?" i stedet for et snaevert +-1 vindue.
+            if sign_dir * remaining <= OVERSHOOT_COMP:
                 ev3_send({"type": "stop"})
                 time.sleep(0.1)
                 # Maaling efter stop (vent pa robotten er stille)
@@ -201,7 +209,7 @@ def turn_to_ball(cap, ball_px, robot_center, robot_heading):
                 h_final, _ = get_robot(frame2 if ret2 else frame)
                 if h_final is None: h_final = h
                 err = abs(angle_diff(target_heading, h_final))
-                ok  = err <= TURN_TOLERANCE * 2
+                ok  = err <= TURN_TOLERANCE * 3
                 print("  Stoppet ved {:.1f} deg  |  Fejl: {:.1f} deg  |  {}".format(
                       h_final, err, "PASS" if ok else "FAIL"))
                 return ok

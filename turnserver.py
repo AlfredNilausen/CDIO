@@ -40,7 +40,6 @@ motor_left.polarity  = "inversed"
 btn     = Button()
 display = Display()
 sound   = Sound()
-turning = threading.Event()
 ready   = threading.Event()   # sat = PC har sagt vi er klar til naeste test
 
 def show(line1, line2=""):
@@ -65,21 +64,16 @@ show("Tryk ENTER", "nar du er klar")
 def stop_motors():
     motor_right.off()
     motor_left.off()
-    turning.clear()
 
 def turn_left_continuous():
     """Drejer til venstre indtil stop() kaldes."""
-    turning.set()
     motor_right.on(SpeedPercent( TURN_SPEED))
     motor_left.on( SpeedPercent(-TURN_SPEED))
-    turning.wait()   # blokerer -- stop_motors() clear'er turning
 
 def turn_right_continuous():
     """Drejer til hojre indtil stop() kaldes."""
-    turning.set()
     motor_right.on(SpeedPercent(-TURN_SPEED))
     motor_left.on( SpeedPercent( TURN_SPEED))
-    turning.wait()
 
 def drive_mm(mm):
     rot = abs(mm) / (math.pi * WHEEL_DIAM_MM)
