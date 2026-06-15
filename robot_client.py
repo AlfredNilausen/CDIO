@@ -9,8 +9,8 @@ import socket
 import json
 import math
 import time
-
-EV3_HOST = "192.168.137.3"
+##EV3_HOST = "192.168.0.1"
+EV3_HOST = "192.168.0.1"
 EV3_PORT = 9999
 TIMEOUT  = 30   # sekunder - lang nok til at robotten kan koere
 
@@ -135,7 +135,7 @@ class RobotClient:
                     time.sleep(0.3)
                     return True
 
-            time.sleep(0.02)
+            time.sleep(0.12)
 
         self._send({"type": "motor_stop"})
         print("[robot] Turn timeout na {:.1f}s".format(timeout))

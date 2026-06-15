@@ -53,13 +53,13 @@ MARKER_SIZE_MM = 80          # fysisk størrelse af printet marker i mm
 # Rute
 CENTER_EXCLUSION_MM = 150    # eksklusionszone rundt om krydset (mm)
 GATE_OFFSET_MM      = 320    # indgangspunkt afstand fra krydset (mm) - større = robotten svinger mere udenom
-WALL_MARGIN_MM      = 300    # bold inden for dette fra kanten behandles som kantbold
-WALL_APPROACH_MM    = 400    # start tilkørsel denne afstand fra bolden (vinkelret på kant)
+WALL_MARGIN_MM      = 230    # bold inden for dette fra kanten behandles som kantbold
+WALL_APPROACH_MM    = 330    # start tilkørsel denne afstand fra bolden (vinkelret på kant)
 
 # Robot bevægelse
 POSITION_TOL_MM    = 40      # betragt waypoint som naaet inden for denne afstand
-APPROACH_OFFSET_MM = 150     # stop denne afstand foer en bold ved opsamling
-OVERSHOOT_COMP_DEG = 5.0     # stop drejning X grader foer maalet (kompenser for glid)
+APPROACH_OFFSET_MM = 80     # stop denne afstand foer en bold ved opsamling
+OVERSHOOT_COMP_DEG = 7.0     # stop drejning X grader foer maalet (kompenser for glid)
 TURN_TIMEOUT_S     = 10.0    # max sekunder til kamera-styret drejning
 
 # ════════════════════════════════════════════════════════════════════════════
