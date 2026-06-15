@@ -557,20 +557,19 @@ def robot_executor():
             robot_stop_req.clear()
             continue
 
-        # Genberegn kun naar ruten er opbrugt OG vi netop har samlet en bold op.
-        # Navigation-waypoints (do_collect=False) skal aldrig trigge genberegning.
-        with route_lock:
-            route_empty = len(current_route) == 0
-        if route_empty and do_collect and last_H_px_world is not None and last_cross_info is not None:
-            time.sleep(1.0)   # vent til kameraet ser efter bolden er opsamlet
-            cross_mm = last_cross_info["center_mm"]
+        # Genberegn ruten efter HVER bold -- ikke kun naar ruten er tom.
+        # Navigation-waypoints (do_collect=False) trigger aldrig genberegning.
+        if do_collect and last_H_px_world is not None:
+            time.sleep(1.0)   # vent til kameraet registrerer at bolden er vaek
+            cross_mm = last_cross_info["center_mm"] if last_cross_info else (BOARD_WIDTH_MM/2, BOARD_HEIGHT_MM/2)
             w_mm = [pixel_to_world((x,y), last_H_px_world) for (x,y,r) in last_whites_px]
             o_mm = [pixel_to_world((x,y), last_H_px_world) for (x,y,r) in last_oranges_px]
             new_route = plan_route(w_mm, o_mm, start_mm, cross_mm)
             with route_lock:
+                current_route.clear()   # kassér resten af gammel plan
                 current_route.extend(new_route)
             if new_route:
-                print("[robot] Bolde tilbage: genberegnet {} wp".format(len(new_route)))
+                print("[robot] Genberegnet: {} wp til naeste bold".format(len(new_route)))
             else:
                 print("[robot] Alle bolde indsamlet!")
                 robot.stop()
