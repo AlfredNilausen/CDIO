@@ -121,7 +121,7 @@ class RobotClient:
 
         while time.time() - start < timeout:
             if stop_fn and stop_fn():
-                self._send({"type": "stop"})
+                self._send({"type": "motor_stop"})
                 return False
 
             h = get_heading_fn()
@@ -131,13 +131,13 @@ class RobotClient:
                     h = self._circular_mean(history[-4:])
                 remaining = self._angle_diff(target_heading, h)
                 if sign_dir * remaining <= overshoot_comp:
-                    self._send({"type": "stop"})
+                    self._send({"type": "motor_stop"})
                     time.sleep(0.3)
                     return True
 
             time.sleep(0.02)
 
-        self._send({"type": "stop"})
+        self._send({"type": "motor_stop"})
         print("[robot] Turn timeout na {:.1f}s".format(timeout))
         return False
 

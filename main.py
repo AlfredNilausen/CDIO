@@ -531,15 +531,15 @@ def robot_executor():
                 print("[robot] Stoppet under drejning")
                 continue
 
-            # 2. Koer frem
+            # 2. Koer frem (collector korer altid)
             drive_dist = dist - (APPROACH_OFFSET_MM if do_collect else 0.0)
             if drive_dist > POSITION_TOL_MM:
-                resp = robot.drive_mm(drive_dist, collecting=do_collect)
+                resp = robot.drive_mm(drive_dist)
                 if resp is None:
                     print("[robot] Ingen svar fra drive - stopper")
                     robot_running.clear()
                     continue
-                print("[robot] Frem {:.0f}mm  collect={}".format(drive_dist, do_collect))
+                print("[robot] Frem {:.0f}mm".format(drive_dist))
 
         if robot_stop_req.is_set():
             robot_running.clear()
@@ -561,6 +561,7 @@ def robot_executor():
                 print("[robot] Bolde tilbage: genberegnet {} wp".format(len(new_route)))
             else:
                 print("[robot] Alle bolde indsamlet!")
+                robot.stop()
                 robot_running.clear()
 
 threading.Thread(target=robot_executor, daemon=True).start()

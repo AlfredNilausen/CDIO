@@ -102,10 +102,12 @@ def mm_to_rotations(mm):
     return mm / (math.pi * WHEEL_DIAM_MM)
 
 def turn_left_continuous():
+    motor_collect.on(SpeedPercent(COLLECT_SPEED))
     motor_right.on(SpeedPercent( TURN_SPEED))
     motor_left.on( SpeedPercent(-TURN_SPEED))
 
 def turn_right_continuous():
+    motor_collect.on(SpeedPercent(COLLECT_SPEED))
     motor_right.on(SpeedPercent(-TURN_SPEED))
     motor_left.on( SpeedPercent( TURN_SPEED))
 
@@ -209,6 +211,12 @@ def handle(cmd):
         motor_right.off(); motor_left.off(); motor_collect.off()
         return {"status": "stopped"}
 
+    if t == "motor_stop":
+        # Stop drive motors only -- does NOT set stop_flag, so drive() can continue
+        motor_right.off()
+        motor_left.off()
+        return {"status": "stopped"}
+
     if t == "turn_left":
         turn_left_continuous()
         return {"status": "turning_left"}
@@ -218,9 +226,8 @@ def handle(cmd):
         return {"status": "turning_right"}
 
     if t == "drive":
-        mm         = float(cmd.get("mm", 0))
-        collecting = cmd.get("collect", False)
-        drive(mm, collecting=collecting)
+        mm = float(cmd.get("mm", 0))
+        drive(mm, collecting=True)
         return {"status": "done", "mm": mm}
 
     if t == "resume":
