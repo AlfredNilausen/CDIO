@@ -148,7 +148,7 @@ def detect_balls(frame, cfg: DetectorConfig):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# KRYDS-DETEKTION  (fra samlet.py)
+# KRYDS-DETEKTION 
 # ════════════════════════════════════════════════════════════════════════════
 
 def _view_to_world(pt_view, scale=DISPLAY_SCALE):
@@ -188,7 +188,7 @@ def detect_red_cross_world(world_img_raw, scale=DISPLAY_SCALE):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# RETNINGS-DETEKTION  (fra direction.py)
+# RETNINGS-DETEKTION 
 # ════════════════════════════════════════════════════════════════════════════
 
 def _make_camera_matrix(w, h):
@@ -540,6 +540,13 @@ def robot_executor():
                 robot_running.clear()
                 robot_stop_req.clear()
                 print("[robot] Stoppet under drejning")
+                continue
+            if not ok:
+                # Heading not visible -- requeue this waypoint and retry
+                print("[robot] Drejning fejlede - genproever waypoint")
+                with route_lock:
+                    current_route.insert(0, wp)
+                time.sleep(0.5)
                 continue
 
             # 2. Koer frem (collector korer altid)

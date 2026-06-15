@@ -105,15 +105,27 @@ class RobotClient:
         if not self.connected:
             return True
 
-        h = get_heading_fn()
+        # Wait for a valid heading -- never fall back to 0.0 because that
+        # computes a completely wrong diff when the robot isn't facing East.
+        h = None
+        wait_end = time.time() + 5.0
+        while time.time() < wait_end:
+            h = get_heading_fn()
+            if h is not None:
+                break
+            time.sleep(0.03)
         if h is None:
-            h = 0.0
+            print("[robot] Ingen heading - springer drejning over")
+            return False
+
         diff = self._angle_diff(target_heading, h)
-        if abs(diff) < 1.0:
+        if abs(diff) < 2.0:
             return True
 
         sign_dir  = 1 if diff > 0 else -1
         direction = "turn_left" if diff > 0 else "turn_right"
+        print("[robot] Drejer {} {:.1f} grader ({:.1f} -> {:.1f})".format(
+              direction, abs(diff), h, target_heading))
         self._send({"type": direction})
 
         start   = time.time()
@@ -135,7 +147,7 @@ class RobotClient:
                     time.sleep(0.3)
                     return True
 
-            time.sleep(0.12)
+            time.sleep(0.04)
 
         self._send({"type": "motor_stop"})
         print("[robot] Turn timeout na {:.1f}s".format(timeout))
