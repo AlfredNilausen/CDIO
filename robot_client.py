@@ -7,6 +7,8 @@ Giver main.py mulighed for at genberegne ruten efter hvert stop.
 
 import socket
 import json
+import math
+import time
 
 EV3_HOST = "192.168.137.3"
 EV3_PORT = 9999
@@ -70,6 +72,74 @@ class RobotClient:
 
     def eject(self):
         return self._send({"type": "eject"})
+
+    # ── Camera-guided turn helpers ──────────────────────────────────────────
+
+    @staticmethod
+    def _angle_diff(target, current):
+        return (target - current + 180) % 360 - 180
+
+    @staticmethod
+    def _circular_mean(angles):
+        sin_sum = sum(math.sin(math.radians(a)) for a in angles)
+        cos_sum = sum(math.cos(math.radians(a)) for a in angles)
+        return math.degrees(math.atan2(sin_sum, cos_sum))
+
+    def turn_left(self):
+        return self._send({"type": "turn_left"})
+
+    def turn_right(self):
+        return self._send({"type": "turn_right"})
+
+    def drive_mm(self, mm, collecting=False):
+        return self._send({"type": "drive", "mm": float(mm), "collect": collecting})
+
+    def turn_to_heading(self, target_heading, get_heading_fn,
+                        overshoot_comp=5.0, timeout=10.0, stop_fn=None):
+        """
+        Camera-guided turn.
+        Sends turn_left/turn_right, polls get_heading_fn() until heading
+        is within overshoot_comp degrees of target, then sends stop.
+        Returns True on success, False on timeout or external stop.
+        """
+        if not self.connected:
+            return True
+
+        h = get_heading_fn()
+        if h is None:
+            h = 0.0
+        diff = self._angle_diff(target_heading, h)
+        if abs(diff) < 1.0:
+            return True
+
+        sign_dir  = 1 if diff > 0 else -1
+        direction = "turn_left" if diff > 0 else "turn_right"
+        self._send({"type": direction})
+
+        start   = time.time()
+        history = []
+
+        while time.time() - start < timeout:
+            if stop_fn and stop_fn():
+                self._send({"type": "stop"})
+                return False
+
+            h = get_heading_fn()
+            if h is not None:
+                history.append(h)
+                if len(history) > 4:
+                    h = self._circular_mean(history[-4:])
+                remaining = self._angle_diff(target_heading, h)
+                if sign_dir * remaining <= overshoot_comp:
+                    self._send({"type": "stop"})
+                    time.sleep(0.3)
+                    return True
+
+            time.sleep(0.02)
+
+        self._send({"type": "stop"})
+        print("[robot] Turn timeout na {:.1f}s".format(timeout))
+        return False
 
     def send_waypoint(self, target_mm, robot_pos_mm, heading_deg, do_collect=False):
         """

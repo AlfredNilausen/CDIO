@@ -101,16 +101,26 @@ def check_stop():
 def mm_to_rotations(mm):
     return mm / (math.pi * WHEEL_DIAM_MM)
 
-def drive(mm):
+def turn_left_continuous():
+    motor_right.on(SpeedPercent( TURN_SPEED))
+    motor_left.on( SpeedPercent(-TURN_SPEED))
+
+def turn_right_continuous():
+    motor_right.on(SpeedPercent(-TURN_SPEED))
+    motor_left.on( SpeedPercent( TURN_SPEED))
+
+def drive(mm, collecting=True):
     check_stop()
     rot = mm_to_rotations(abs(mm))
     # With both motors polarity=inversed: SpeedPercent(+) = forward, SpeedPercent(-) = backward
     sp  = DRIVE_SPEED if mm > 0 else -DRIVE_SPEED
-    motor_collect.on(SpeedPercent(COLLECT_SPEED))
+    if collecting:
+        motor_collect.on(SpeedPercent(COLLECT_SPEED))
     motor_right.on_for_rotations(SpeedPercent( sp), rot, block=False)
     motor_left.on_for_rotations( SpeedPercent( sp), rot, block=True)
     motor_right.off(); motor_left.off()
-    motor_collect.off()
+    if collecting:
+        motor_collect.off()
 
 def turn(degrees):
     check_stop()
@@ -198,6 +208,20 @@ def handle(cmd):
         pause_event.clear()
         motor_right.off(); motor_left.off(); motor_collect.off()
         return {"status": "stopped"}
+
+    if t == "turn_left":
+        turn_left_continuous()
+        return {"status": "turning_left"}
+
+    if t == "turn_right":
+        turn_right_continuous()
+        return {"status": "turning_right"}
+
+    if t == "drive":
+        mm         = float(cmd.get("mm", 0))
+        collecting = cmd.get("collect", False)
+        drive(mm, collecting=collecting)
+        return {"status": "done", "mm": mm}
 
     if t == "resume":
         stop_flag.clear()

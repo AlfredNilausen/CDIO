@@ -56,6 +56,12 @@ GATE_OFFSET_MM      = 320    # indgangspunkt afstand fra krydset (mm) - større 
 WALL_MARGIN_MM      = 300    # bold inden for dette fra kanten behandles som kantbold
 WALL_APPROACH_MM    = 400    # start tilkørsel denne afstand fra bolden (vinkelret på kant)
 
+# Robot bevægelse
+POSITION_TOL_MM    = 40      # betragt waypoint som naaet inden for denne afstand
+APPROACH_OFFSET_MM = 150     # stop denne afstand foer en bold ved opsamling
+OVERSHOOT_COMP_DEG = 5.0     # stop drejning X grader foer maalet (kompenser for glid)
+TURN_TIMEOUT_S     = 10.0    # max sekunder til kamera-styret drejning
+
 # ════════════════════════════════════════════════════════════════════════════
 # BOLD-DETEKTION  (fra samlet.py)
 # ════════════════════════════════════════════════════════════════════════════
@@ -498,43 +504,64 @@ def robot_executor():
             robot_stop_req.clear()
             print("[robot] Stoppet")
             continue
-        # Prefer live ArUco position over EV3 dead-reckoning
-        pos     = start_mm if robot_pos_live[0] is None else robot_pos_live[0]
-        heading = last_dir_info.get("heading") or robot_head_live[0] or 0.0
+
+        # Always use live camera position as ground truth
+        pos        = start_mm
         wp_pos     = (wp[0], wp[1])
         do_collect = wp[2] if len(wp) > 2 else False
         print("[robot] -> {}  collect={}".format(wp_pos, do_collect))
-        resp = robot.send_waypoint(wp_pos, pos, heading, do_collect=do_collect)
-        if resp is None:
-            print("[robot] Ingen svar - stopper")
-            robot_running.clear()
-            continue
-        status = resp.get("status")
-        print("[robot] Status: {}".format(status))
-        if status == "arrived":
-            robot_pos_live[0]  = tuple(resp["pos"])
-            robot_head_live[0] = resp["heading"]
-            # Only recalculate when the planned route is fully exhausted.
-            # Recalculating after every waypoint causes an infinite loop because
-            # the camera still sees the ball the robot just visited.
-            with route_lock:
-                route_empty = len(current_route) == 0
-            if route_empty and last_H_px_world is not None and last_cross_info is not None:
-                time.sleep(1.0)   # let camera settle before checking for remaining balls
-                cross_mm = last_cross_info["center_mm"]
-                cur_pos  = robot_pos_live[0]
-                w_mm = [pixel_to_world((x,y), last_H_px_world) for (x,y,r) in last_whites_px]
-                o_mm = [pixel_to_world((x,y), last_H_px_world) for (x,y,r) in last_oranges_px]
-                new_route = plan_route(w_mm, o_mm, cur_pos, cross_mm)
-                with route_lock:
-                    current_route.extend(new_route)
-                if new_route:
-                    print("[robot] Bolde tilbage: genberegnet {} wp".format(len(new_route)))
-                else:
-                    print("[robot] Alle bolde indsamlet!")
+
+        dx   = wp_pos[0] - pos[0]
+        dy   = wp_pos[1] - pos[1]
+        dist = math.hypot(dx, dy)
+
+        if dist >= POSITION_TOL_MM:
+            # 1. Kamera-styret drejning
+            target_h = math.degrees(math.atan2(dy, dx))
+            ok = robot.turn_to_heading(
+                target_h,
+                lambda: last_dir_info.get("heading"),
+                overshoot_comp=OVERSHOOT_COMP_DEG,
+                timeout=TURN_TIMEOUT_S,
+                stop_fn=lambda: robot_stop_req.is_set(),
+            )
+            if robot_stop_req.is_set():
+                robot_running.clear()
+                robot_stop_req.clear()
+                print("[robot] Stoppet under drejning")
+                continue
+
+            # 2. Koer frem
+            drive_dist = dist - (APPROACH_OFFSET_MM if do_collect else 0.0)
+            if drive_dist > POSITION_TOL_MM:
+                resp = robot.drive_mm(drive_dist, collecting=do_collect)
+                if resp is None:
+                    print("[robot] Ingen svar fra drive - stopper")
                     robot_running.clear()
-        elif status == "stopped":
+                    continue
+                print("[robot] Frem {:.0f}mm  collect={}".format(drive_dist, do_collect))
+
+        if robot_stop_req.is_set():
             robot_running.clear()
+            robot_stop_req.clear()
+            continue
+
+        # Genberegn kun naar ruten er opbrugt
+        with route_lock:
+            route_empty = len(current_route) == 0
+        if route_empty and last_H_px_world is not None and last_cross_info is not None:
+            time.sleep(1.0)   # vent til kameraet ser efter bolden er opsamlet
+            cross_mm = last_cross_info["center_mm"]
+            w_mm = [pixel_to_world((x,y), last_H_px_world) for (x,y,r) in last_whites_px]
+            o_mm = [pixel_to_world((x,y), last_H_px_world) for (x,y,r) in last_oranges_px]
+            new_route = plan_route(w_mm, o_mm, start_mm, cross_mm)
+            with route_lock:
+                current_route.extend(new_route)
+            if new_route:
+                print("[robot] Bolde tilbage: genberegnet {} wp".format(len(new_route)))
+            else:
+                print("[robot] Alle bolde indsamlet!")
+                robot_running.clear()
 
 threading.Thread(target=robot_executor, daemon=True).start()
 
