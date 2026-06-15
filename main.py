@@ -375,7 +375,18 @@ def plan_route(white_mm, orange_mm, start_mm, cross_mm):
             nxt = min(group, key=lambda p: _dist(current, p))
             group.remove(nxt)
 
-            # Only detour if direct path clips the cross exclusion zone
+            # Wall balls: insert a perpendicular approach waypoint so the
+            # robot drives straight toward the wall instead of at an angle.
+            approach_pt, _ = _wall_approach(nxt)
+            if approach_pt is not None:
+                for wp in _detour(current, approach_pt, cross_mm):
+                    if wp != approach_pt:
+                        route.append((wp[0], wp[1], False))
+                        current = wp
+                route.append((approach_pt[0], approach_pt[1], False))
+                current = approach_pt
+
+            # Navigate to the ball (with cross avoidance from wherever we are)
             for wp in _detour(current, nxt, cross_mm):
                 if wp != nxt:
                     route.append((wp[0], wp[1], False))
