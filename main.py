@@ -96,6 +96,7 @@ class DetectorConfig:
     orange_h_max: int = 35
     orange_s_min: int = 70
     orange_v_min: int = 85
+    min_color_frac: float = 0.3   # min. andel af cirklens omraade der skal vaere hvid/orange for at taelle som bold
 
 
 def _ensure_odd(n):
@@ -145,6 +146,8 @@ def detect_balls(frame, cfg: DetectorConfig):
                 continue
             wo = np.mean(white_mask [y0:y1, x0:x1] > 0)
             oo = np.mean(orange_mask[y0:y1, x0:x1] > 0)
+            if max(wo, oo) < cfg.min_color_frac:
+                continue   # neither white nor orange enough -- not a ball
             (oranges if oo > wo else whites).append((cx, cy, r))
     return whites, oranges, edges
 
