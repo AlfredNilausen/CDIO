@@ -58,8 +58,8 @@ WALL_APPROACH_MM    = 330    # start tilkørsel denne afstand fra bolden (vinkel
 
 # Robot bevægelse
 POSITION_TOL_MM    = 40      # betragt waypoint som naaet inden for denne afstand
-APPROACH_OFFSET_MM = 80     # stop denne afstand foer en bold ved opsamling
-OVERSHOOT_COMP_DEG = 7.0     # stop drejning X grader foer maalet (kompenser for glid)
+APPROACH_OFFSET_MM = 65     # stop denne afstand foer en bold ved opsamling
+OVERSHOOT_COMP_DEG = 9.0     # stop drejning X grader foer maalet (kompenser for glid)
 TURN_TIMEOUT_S     = 10.0    # max sekunder til kamera-styret drejning
 
 # ════════════════════════════════════════════════════════════════════════════

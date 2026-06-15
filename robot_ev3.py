@@ -29,7 +29,7 @@ WHEEL_DIAM_MM   = 56
 
 DRIVE_SPEED        = 20
 TURN_SPEED         = 10
-COLLECT_SPEED      = 50
+COLLECT_SPEED      = 25
 COLLECT_TIME_S     = 1.5
 POSITION_TOL_MM    = 40
 APPROACH_OFFSET_MM = 150   # stop this far short of a ball when collecting
