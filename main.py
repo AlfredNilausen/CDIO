@@ -61,6 +61,8 @@ POSITION_TOL_MM    = 40      # betragt waypoint som naaet inden for denne afstan
 APPROACH_OFFSET_MM = 65     # stop denne afstand foer en bold ved opsamling
 OVERSHOOT_COMP_DEG = 9.0     # stop drejning X grader foer maalet (kompenser for glid)
 TURN_TIMEOUT_S     = 10.0    # max sekunder til kamera-styret drejning
+TURN_CORRECTION_DEG_TOL = 3.0  # acceptabel afvigelse efter drejning, foer der koeres fremad
+TURN_MAX_ATTEMPTS  = 3          # maks. antal drejningsforsoeg (1 normal + korrektioner) pr. waypoint
 
 # ════════════════════════════════════════════════════════════════════════════
 # BOLD-DETEKTION  (fra samlet.py)
@@ -527,29 +529,51 @@ def robot_executor():
         dist = math.hypot(dx, dy)
 
         if dist >= POSITION_TOL_MM:
-            # 1. Kamera-styret drejning
-            target_h = math.degrees(math.atan2(dy, dx))
-            ok = robot.turn_to_heading(
-                target_h,
-                lambda: last_dir_info.get("heading"),
-                overshoot_comp=OVERSHOOT_COMP_DEG,
-                timeout=TURN_TIMEOUT_S,
-                stop_fn=lambda: robot_stop_req.is_set(),
-            )
-            if robot_stop_req.is_set():
-                robot_running.clear()
-                robot_stop_req.clear()
-                print("[robot] Stoppet under drejning")
-                continue
-            if not ok:
-                # Heading not visible -- requeue this waypoint and retry
-                print("[robot] Drejning fejlede - genproever waypoint")
-                with route_lock:
-                    current_route.insert(0, wp)
-                time.sleep(0.5)
+            # 1. Kamera-styret drejning, med korrektion hvis vi stadig er
+            #    skaeve efter foerste drejning (overshoot/glid)
+            turn_failed = False
+            for attempt in range(TURN_MAX_ATTEMPTS):
+                pos      = start_mm   # live position, opdateres af kamera-traad
+                dx       = wp_pos[0] - pos[0]
+                dy       = wp_pos[1] - pos[1]
+                dist     = math.hypot(dx, dy)
+                target_h = math.degrees(math.atan2(dy, dx))
+
+                comp = OVERSHOOT_COMP_DEG if attempt == 0 else TURN_CORRECTION_DEG_TOL
+                ok = robot.turn_to_heading(
+                    target_h,
+                    lambda: last_dir_info.get("heading"),
+                    overshoot_comp=comp,
+                    timeout=TURN_TIMEOUT_S,
+                    stop_fn=lambda: robot_stop_req.is_set(),
+                )
+                if robot_stop_req.is_set():
+                    robot_running.clear()
+                    robot_stop_req.clear()
+                    print("[robot] Stoppet under drejning")
+                    turn_failed = True
+                    break
+                if not ok:
+                    # Heading not visible -- requeue this waypoint and retry
+                    print("[robot] Drejning fejlede - genproever waypoint")
+                    with route_lock:
+                        current_route.insert(0, wp)
+                    time.sleep(0.5)
+                    turn_failed = True
+                    break
+
+                h_now = last_dir_info.get("heading")
+                err   = robot._angle_diff(target_h, h_now) if h_now is not None else 0.0
+                if abs(err) <= TURN_CORRECTION_DEG_TOL:
+                    break
+                print("[robot] Stadig {:.1f} grader fra maal - korrigerer (forsoeg {})".format(
+                    err, attempt + 1))
+
+            if turn_failed:
                 continue
 
-            # 2. Koer frem (collector korer altid)
+            # 2. Koer frem (collector korer altid) -- dist er genberegnet
+            #    efter sidste drejning saa den matcher robottens faktiske retning
             drive_dist = dist - (APPROACH_OFFSET_MM if do_collect else 0.0)
             if drive_dist > POSITION_TOL_MM:
                 resp = robot.drive_mm(drive_dist)

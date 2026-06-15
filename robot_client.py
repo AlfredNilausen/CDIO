@@ -139,8 +139,8 @@ class RobotClient:
             h = get_heading_fn()
             if h is not None:
                 history.append(h)
-                if len(history) > 4:
-                    h = self._circular_mean(history[-4:])
+                if len(history) > 2:
+                    h = self._circular_mean(history[-2:])
                 remaining = self._angle_diff(target_heading, h)
                 if sign_dir * remaining <= overshoot_comp:
                     self._send({"type": "motor_stop"})
