@@ -9,7 +9,7 @@ import socket
 import json
 import math
 import time
-EV3_HOST = "192.168.0.1"
+EV3_HOST = "192.168.137.3"
 ##EV3_HOST = "192.168.0.1"
 EV3_PORT = 9999
 TIMEOUT  = 30   # sekunder - lang nok til at robotten kan koere

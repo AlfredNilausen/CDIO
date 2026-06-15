@@ -40,7 +40,7 @@ robot.connect()
 # KONFIGURATION
 # ════════════════════════════════════════════════════════════════════════════
 
-CAMERA_INDEX   = 1
+CAMERA_INDEX   = 0
 SMOOTH_ALPHA   = 0.80
 DISPLAY_SCALE  = 0.5
 
