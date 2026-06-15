@@ -28,7 +28,7 @@ PORT = 9998   # Anden port end hoved-serveren
 WHEEL_BASE_MM  = 120
 WHEEL_DIAM_MM  = 56
 DRIVE_SPEED    = 30
-TURN_SPEED     = 20
+TURN_SPEED     = 10
 COLLECT_SPEED  = 50
 
 motor_right   = LargeMotor(OUTPUT_A)

@@ -30,7 +30,7 @@ MARKER_ID      = 0
 MARKER_SIZE_MM = 80
 HEADING_OFFSET = -88     # juster i trin af 90 hvis pilen peger forkert
 TURN_TOLERANCE = 1.0     # grader -- stopper indenfor dette af maalet
-OVERSHOOT_COMP = 12.0     # grader -- stop lidt foer maalet for at kompensere for glid
+OVERSHOOT_COMP = 5.0     # grader -- stop lidt foer maalet for at kompensere for glid
 
 # Bold-detektion
 WHITE_S_MAX   = 130
