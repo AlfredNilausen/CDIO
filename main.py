@@ -546,10 +546,11 @@ def robot_executor():
             robot_stop_req.clear()
             continue
 
-        # Genberegn kun naar ruten er opbrugt
+        # Genberegn kun naar ruten er opbrugt OG vi netop har samlet en bold op.
+        # Navigation-waypoints (do_collect=False) skal aldrig trigge genberegning.
         with route_lock:
             route_empty = len(current_route) == 0
-        if route_empty and last_H_px_world is not None and last_cross_info is not None:
+        if route_empty and do_collect and last_H_px_world is not None and last_cross_info is not None:
             time.sleep(1.0)   # vent til kameraet ser efter bolden er opsamlet
             cross_mm = last_cross_info["center_mm"]
             w_mm = [pixel_to_world((x,y), last_H_px_world) for (x,y,r) in last_whites_px]
