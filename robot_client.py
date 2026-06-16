@@ -1,18 +1,18 @@
 """
-robot_client.py  -  korer paa PC
+robot_client.py  -  korer pa PC
 
-Send ET waypoint ad gangen og vent paa ACK.
-Giver main.py mulighed for at genberegne ruten efter hvert stop.
+Camera-guided TCP client for the EV3.
 """
 
 import socket
 import json
 import math
 import time
+
 EV3_HOST = "192.168.137.3"
-##EV3_HOST = "192.168.0.1"
 EV3_PORT = 9999
-TIMEOUT  = 30   # sekunder - lang nok til at robotten kan koere
+TIMEOUT  = 30
+
 
 class RobotClient:
     def __init__(self, host=EV3_HOST, port=EV3_PORT):
@@ -27,10 +27,10 @@ class RobotClient:
             self.sock.settimeout(TIMEOUT)
             self.sock.connect((self.host, self.port))
             self.connected = True
-            print("[robot] Forbundet til {}:{}".format(self.host, self.port))
+            print("[robot] Connected to {}:{}".format(self.host, self.port))
             return True
         except Exception as e:
-            print("[robot] Kunne ikke forbinde: {}".format(e))
+            print("[robot] Connection failed: {}".format(e))
             self.connected = False
             return False
 
@@ -53,7 +53,7 @@ class RobotClient:
                 buf += chunk
             return json.loads(buf.split(b"\n")[0].decode())
         except Exception as e:
-            print("[robot] Fejl: {}".format(e))
+            print("[robot] Send error: {}".format(e))
             self.connected = False
             return None
 
@@ -64,6 +64,9 @@ class RobotClient:
     def stop(self):
         self._send({"type": "stop"})
 
+    def motor_stop(self):
+        self._send({"type": "motor_stop"})
+
     def resume(self):
         self._send({"type": "resume"})
 
@@ -73,7 +76,48 @@ class RobotClient:
     def eject(self):
         return self._send({"type": "eject"})
 
-    # ── Camera-guided turn helpers ──────────────────────────────────────────
+    def drive_mm(self, mm, speed=None):
+        cmd = {"type": "drive", "mm": float(mm)}
+        if speed is not None:
+            cmd["speed"] = int(speed)
+        return self._send(cmd)
+
+    def drive_to_position(self, target_mm, get_pos_fn, reverse=False,
+                          tol_mm=50, speed=None, timeout=15.0, stop_fn=None):
+        """
+        Starts continuous drive, polls get_pos_fn() (returns (x,y) mm or None),
+        sends motor_stop when within tol_mm of target_mm.
+        Returns True on success, False on timeout or stop request.
+        """
+        if not self.connected:
+            return True
+
+        cmd = {"type": "drive_rev" if reverse else "drive_fwd"}
+        if speed is not None:
+            cmd["speed"] = int(speed)
+        self._send(cmd)
+
+        t_start = time.time()
+        while time.time() - t_start < timeout:
+            if stop_fn and stop_fn():
+                self._send({"type": "motor_stop"})
+                return False
+            pos = get_pos_fn()
+            if pos is not None:
+                d = math.hypot(target_mm[0] - pos[0], target_mm[1] - pos[1])
+                if d <= tol_mm:
+                    self._send({"type": "motor_stop"})
+                    time.sleep(0.15)
+                    return True
+            time.sleep(0.05)
+
+        self._send({"type": "motor_stop"})
+        print("[robot] drive_to_position timeout ({:.0f}mm from target)".format(
+            math.hypot(target_mm[0] - pos[0], target_mm[1] - pos[1])
+            if pos is not None else -1))
+        return False
+
+    # ── Angle helpers ────────────────────────────────────────────────────────
 
     @staticmethod
     def _angle_diff(target, current):
@@ -81,32 +125,23 @@ class RobotClient:
 
     @staticmethod
     def _circular_mean(angles):
-        sin_sum = sum(math.sin(math.radians(a)) for a in angles)
-        cos_sum = sum(math.cos(math.radians(a)) for a in angles)
-        return math.degrees(math.atan2(sin_sum, cos_sum))
+        s = sum(math.sin(math.radians(a)) for a in angles)
+        c = sum(math.cos(math.radians(a)) for a in angles)
+        return math.degrees(math.atan2(s, c))
 
-    def turn_left(self):
-        return self._send({"type": "turn_left"})
-
-    def turn_right(self):
-        return self._send({"type": "turn_right"})
-
-    def drive_mm(self, mm, collecting=False):
-        return self._send({"type": "drive", "mm": float(mm), "collect": collecting})
+    # ── Camera-guided turn ───────────────────────────────────────────────────
 
     def turn_to_heading(self, target_heading, get_heading_fn,
-                        overshoot_comp=5.0, timeout=10.0, stop_fn=None):
+                        overshoot_comp=8.0, timeout=12.0, stop_fn=None):
         """
-        Camera-guided turn.
-        Sends turn_left/turn_right, polls get_heading_fn() until heading
-        is within overshoot_comp degrees of target, then sends stop.
-        Returns True on success, False on timeout or external stop.
+        Polls get_heading_fn() until heading reaches target_heading.
+        Returns True on success, False on timeout / no heading / stop request.
         """
         if not self.connected:
             return True
 
-        # Wait for a valid heading -- never fall back to 0.0 because that
-        # computes a completely wrong diff when the robot isn't facing East.
+        # Wait up to 5 s for a valid heading before computing diff.
+        # Never fall back to 0.0 -- that produces a completely wrong turn.
         h = None
         wait_end = time.time() + 5.0
         while time.time() < wait_end:
@@ -114,8 +149,9 @@ class RobotClient:
             if h is not None:
                 break
             time.sleep(0.03)
+
         if h is None:
-            print("[robot] Ingen heading - springer drejning over")
+            print("[robot] No heading - skipping turn")
             return False
 
         diff = self._angle_diff(target_heading, h)
@@ -124,14 +160,14 @@ class RobotClient:
 
         sign_dir  = 1 if diff > 0 else -1
         direction = "turn_left" if diff > 0 else "turn_right"
-        print("[robot] Drejer {} {:.1f} grader ({:.1f} -> {:.1f})".format(
+        print("[robot] {} {:.1f}deg  ({:.1f} -> {:.1f})".format(
               direction, abs(diff), h, target_heading))
         self._send({"type": direction})
 
-        start   = time.time()
+        t_start = time.time()
         history = []
 
-        while time.time() - start < timeout:
+        while time.time() - t_start < timeout:
             if stop_fn and stop_fn():
                 self._send({"type": "motor_stop"})
                 return False
@@ -139,8 +175,8 @@ class RobotClient:
             h = get_heading_fn()
             if h is not None:
                 history.append(h)
-                if len(history) > 2:
-                    h = self._circular_mean(history[-2:])
+                if len(history) > 3:
+                    h = self._circular_mean(history[-3:])
                 remaining = self._angle_diff(target_heading, h)
                 if sign_dir * remaining <= overshoot_comp:
                     self._send({"type": "motor_stop"})
@@ -150,26 +186,12 @@ class RobotClient:
             time.sleep(0.04)
 
         self._send({"type": "motor_stop"})
-        print("[robot] Turn timeout na {:.1f}s".format(timeout))
+        print("[robot] Turn timeout after {:.1f}s".format(timeout))
         return False
-
-    def send_waypoint(self, target_mm, robot_pos_mm, heading_deg, do_collect=False):
-        """
-        Send ET waypoint. Blokerer til robotten melder 'arrived' eller 'stopped'.
-        Returnerer dict: {"status": ..., "pos": [...], "heading": ...}
-        """
-        cmd = {
-            "type":    "goto",
-            "target":  [float(target_mm[0]),    float(target_mm[1])],
-            "pos":     [float(robot_pos_mm[0]),  float(robot_pos_mm[1])],
-            "heading": float(heading_deg),
-            "collect": do_collect,
-        }
-        print("[robot] Sender waypoint {}".format(target_mm))
-        return self._send(cmd)
 
 
 _client = RobotClient()
+
 
 def get_client():
     return _client
