@@ -240,13 +240,117 @@ _OBJ_PTS        = np.array([
     [-_half, -_half, 0],
 ], dtype=np.float32)
 
+# Board corners in world mm (Z=0), in the same BL/TL/TR/BR order used
+# everywhere else (see compute_homographies). Used to recover the camera's
+# true 3D pose so marker parallax can be corrected exactly, even when the
+# camera looks at the board at an angle (each corner then sits at a
+# different distance from the camera, which a single height/nadir scalar
+# can't capture).
+_BOARD_OBJ_PTS = np.array([
+    [0,              0,               0],
+    [0,              BOARD_HEIGHT_MM, 0],
+    [BOARD_WIDTH_MM, BOARD_HEIGHT_MM, 0],
+    [BOARD_WIDTH_MM, 0,               0],
+], dtype=np.float32)
+
+
+def _line_intersect(p1, p2, p3, p4):
+    """Intersection of line p1-p2 with line p3-p4, or None if parallel."""
+    x1, y1 = p1; x2, y2 = p2; x3, y3 = p3; x4, y4 = p4
+    d = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    if abs(d) < 1e-9:
+        return None
+    px = ((x1*y2 - y1*x2)*(x3-x4) - (x1-x2)*(x3*y4 - y3*x4)) / d
+    py = ((x1*y2 - y1*x2)*(y3-y4) - (y1-y2)*(x3*y4 - y3*x4)) / d
+    return px, py
+
+
+def estimate_focal_length(corners_px, principal_point):
+    """
+    Self-calibrates focal length from the board's known rectangular shape
+    (single-view calibration from a rectangle): the top/bottom edges are
+    parallel in 3D and meet at a vanishing point VP1 in the image, same for
+    the left/right edges -> VP2. Since those two edge directions are
+    perpendicular in 3D, f^2 = -(VP1-p).(VP2-p). This replaces the guessed
+    focal length with a real one derived from the camera's actual tilt, so
+    both heading and position solvePnP calls stop drifting depending on
+    where in the frame / which way the robot is.
+    Returns None if the board is too close to fronto-parallel for the
+    vanishing points to be well-defined.
+    """
+    TL, TR = corners_px["TL"], corners_px["TR"]
+    BL, BR = corners_px["BL"], corners_px["BR"]
+    vp1 = _line_intersect(TL, TR, BL, BR)
+    vp2 = _line_intersect(TL, BL, TR, BR)
+    if vp1 is None or vp2 is None:
+        return None
+    px, py = principal_point
+    dot = (vp1[0]-px)*(vp2[0]-px) + (vp1[1]-py)*(vp2[1]-py)
+    f_sq = -dot
+    if f_sq <= 0:
+        return None
+    f = math.sqrt(f_sq)
+    # Near fronto-parallel, the vanishing points shoot toward infinity and
+    # tiny corner-pixel noise swings f wildly - reject anything implausible
+    # rather than let one bad frame corrupt the smoothed estimate.
+    diag = math.hypot(2*px, 2*py)
+    if not (0.3*diag <= f <= 6*diag):
+        return None
+    return f
+
+
+_focal_length_est = None  # smoothed self-calibrated focal length (px)
+
+
+def _camera_matrix(frame_shape):
+    """Pinhole intrinsics: uses the self-calibrated focal length once
+    estimate_focal_length() has warmed up, falling back to a rough guess
+    until then. Used consistently for both the marker and board solvePnP
+    calls so their relative pose stays correct even before warm-up."""
+    H, W = frame_shape[:2]
+    f    = _focal_length_est if _focal_length_est is not None else max(W, H)
+    cam  = np.array([[f, 0, W/2], [0, f, H/2], [0, 0, 1]], dtype=np.float64)
+    dist = np.zeros((5, 1), dtype=np.float64)
+    return cam, dist
+
+
+def board_pose(corners_px, cam_mat, dist_coef):
+    """
+    Solves for the camera's pose relative to the board's world frame (Z=0)
+    using the 4 known board corners. Returns (R, t) such that for any world
+    point P_world, its camera-frame position is P_cam = R @ P_world + t -
+    or None if the solve fails. This captures the true geometry of a tilted
+    camera (corners at different distances), unlike a single height scalar.
+    """
+    img_pts = np.array([
+        corners_px["BL"], corners_px["TL"], corners_px["TR"], corners_px["BR"],
+    ], dtype=np.float32)
+    ok, rvec, tvec = cv2.solvePnP(
+        _BOARD_OBJ_PTS, img_pts, cam_mat, dist_coef,
+        flags=cv2.SOLVEPNP_IPPE,
+    )
+    if not ok:
+        return None
+    R, _ = cv2.Rodrigues(rvec)
+    return R, tvec
+
+
+def marker_ground_position(tvec_marker, pose):
+    """
+    Transforms the marker's camera-frame 3D position (from detect_heading's
+    tvec) into world (X, Y) mm using the calibrated board pose, then drops
+    the height (Z) component to get the marker's ground footprint - the
+    point on the board directly below it, which is what the robot actually
+    drives to. Exact for any camera angle, no height measurement needed.
+    """
+    R, t = pose
+    p_world = (R.T @ (tvec_marker - t)).flatten()
+    return float(p_world[0]), float(p_world[1])
+
 
 def detect_heading(frame):
     """Returns dict with found/heading/center_px, or {found: False}."""
-    H, W  = frame.shape[:2]
-    f     = max(W, H)
-    cam   = np.array([[f, 0, W/2], [0, f, H/2], [0, 0, 1]], dtype=np.float64)
-    dist  = np.zeros((5, 1), dtype=np.float64)
+    cam, dist = _camera_matrix(frame.shape)
     gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     corners, ids, _ = _aruco_detector.detectMarkers(gray)
     if ids is None:
@@ -420,12 +524,10 @@ def draw_route(world_img, route, start_mm, scale=DISPLAY_SCALE):
             cv2.line(world_img, (mx, my), (ex, ey), col, 2)
 
 
-def draw_robot(world_img, dir_info, H_px_to_world, scale=DISPLAY_SCALE):
+def draw_robot(world_img, dir_info, pos_mm, scale=DISPLAY_SCALE):
     if not dir_info.get("found"):
         return
-    cx, cy = dir_info["center_px"]
-    wmm    = pixel_to_world((cx, cy), H_px_to_world)
-    pv     = world_to_view(wmm, scale)
+    pv     = world_to_view(pos_mm, scale)
     h      = dir_info["heading"]
     cv2.circle(world_img, pv, 10, (255, 180, 0), -1)
     ex = int(pv[0] + 150*math.cos(math.radians(h)))
@@ -464,6 +566,7 @@ cfg          = DetectorConfig()
 prev_corners = None
 
 last_H_px_world = None
+last_board_pose = None
 last_cross      = None
 last_goals      = []
 last_dir_info   = {"found": False}
@@ -706,6 +809,16 @@ while True:
                 corners, DISPLAY_SCALE)
             last_H_px_world = H_px_to_world
 
+            f_est = estimate_focal_length(
+                corners, (frame.shape[1] / 2.0, frame.shape[0] / 2.0))
+            if f_est is not None:
+                _focal_length_est = (f_est if _focal_length_est is None else
+                    SMOOTH_ALPHA * _focal_length_est + (1 - SMOOTH_ALPHA) * f_est)
+
+            pose = board_pose(corners, *_camera_matrix(frame.shape))
+            if pose is not None:
+                last_board_pose = pose
+
             world_raw = cv2.warpPerspective(frame, H_px_to_view, (dw, dh))
             world_img = world_raw.copy()
             draw_world_grid(world_img, DISPLAY_SCALE, step_mm=200)
@@ -742,11 +855,13 @@ while True:
     dir_info = detect_heading(frame)
     if dir_info["found"]:
         last_dir_info = dir_info
-        if last_H_px_world is not None:
+        if last_board_pose is not None:
+            start_mm = marker_ground_position(dir_info["tvec"], last_board_pose)
+        elif last_H_px_world is not None:
             start_mm = pixel_to_world(dir_info["center_px"], last_H_px_world)
 
     if last_H_px_world is not None:
-        draw_robot(world_img, last_dir_info, last_H_px_world)
+        draw_robot(world_img, last_dir_info, start_mm)
 
     h_str = "{:+.1f}".format(last_dir_info["heading"]) \
             if last_dir_info.get("found") else "?"
