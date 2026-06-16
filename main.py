@@ -44,7 +44,6 @@ APPROACH_OFFSET_MM = 40     # stop this far short of ball (brush sweeps it in)
 GOAL_MIN_GAP_MM    = 60     # minimum gap width to count as a goal opening
 GOAL_APPROACH_MM   = 220    # approach point distance inside field from goal
 
-OVERSHOOT_COMP_DEG = 5.0
 TURN_TIMEOUT_S     = 12.0
 ROUTE_INTERVAL_S   = 3.0    # auto-refresh display route while idle
 BALL_DRIVE_SPEED   = 10     # slow speed sent to EV3 when sweeping through a ball
@@ -429,9 +428,9 @@ def draw_robot(world_img, dir_info, H_px_to_world, scale=DISPLAY_SCALE):
     pv     = world_to_view(wmm, scale)
     h      = dir_info["heading"]
     cv2.circle(world_img, pv, 10, (255, 180, 0), -1)
-    ex = int(pv[0] + 25*math.cos(math.radians(h)))
-    ey = int(pv[1] - 25*math.sin(math.radians(h)))
-    cv2.arrowedLine(world_img, pv, (ex, ey), (255, 180, 0), 2, tipLength=0.4)
+    ex = int(pv[0] + 150*math.cos(math.radians(h)))
+    ey = int(pv[1] - 150*math.sin(math.radians(h)))
+    cv2.arrowedLine(world_img, pv, (ex, ey), (255, 180, 0), 2, tipLength=0.2)
 
 
 def draw_balls(world_img, whites_px, oranges_px, H_px_to_world, scale=DISPLAY_SCALE):
@@ -579,7 +578,7 @@ def robot_executor():
             ok = robot.turn_to_heading(
                 target_h,
                 lambda: last_dir_info.get("heading"),
-                overshoot_comp=OVERSHOOT_COMP_DEG,
+                pulse_ms=300,
                 timeout=TURN_TIMEOUT_S,
                 stop_fn=lambda: robot_stop_req.is_set(),
             )
@@ -606,6 +605,7 @@ def robot_executor():
                 tol_mm=tol,
                 timeout=15.0,
                 stop_fn=lambda: robot_stop_req.is_set(),
+                get_heading_fn=lambda: last_dir_info.get("heading"),
             )
             if not reached:
                 print("[robot] Did not reach ({:.0f},{:.0f}) - continuing".format(
