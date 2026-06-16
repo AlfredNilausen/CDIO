@@ -44,7 +44,7 @@ APPROACH_OFFSET_MM = 40     # stop this far short of ball (brush sweeps it in)
 GOAL_MIN_GAP_MM    = 60     # minimum gap width to count as a goal opening
 GOAL_APPROACH_MM   = 220    # approach point distance inside field from goal
 
-OVERSHOOT_COMP_DEG = 8.0
+OVERSHOOT_COMP_DEG = 5.0
 TURN_TIMEOUT_S     = 12.0
 ROUTE_INTERVAL_S   = 3.0    # auto-refresh display route while idle
 BALL_DRIVE_SPEED   = 10     # slow speed sent to EV3 when sweeping through a ball
@@ -485,6 +485,43 @@ current_route  = []
 route_lock     = threading.Lock()
 
 
+def _replan_from_camera():
+    """
+    Recomputes the route from current camera detections and robot position.
+    Waits up to 3s for homography if temporarily unavailable.
+    Updates current_route and last_route (display). Stops the robot if no
+    balls and no goal remain.
+    """
+    global last_route
+
+    wait_end = time.time() + 3.0
+    while last_H_px_world is None and time.time() < wait_end:
+        time.sleep(0.1)
+
+    if last_H_px_world is None:
+        print("[robot] No homography - cannot replan, stopping")
+        robot_running.clear()
+        return
+
+    cross_mm = (last_cross["center_mm"] if last_cross
+                else (BOARD_WIDTH_MM / 2.0, BOARD_HEIGHT_MM / 2.0))
+    w_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in last_whites_px]
+    o_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in last_oranges_px]
+    new_route = plan_route(w_mm, o_mm, start_mm, cross_mm, last_goals)
+    last_route = new_route
+    with route_lock:
+        current_route.clear()
+        current_route.extend(new_route)
+
+    if new_route:
+        print("[robot] Replanned: {} waypoints ({}W {}O)".format(
+            len(new_route), len(w_mm), len(o_mm)))
+    else:
+        print("[robot] All balls collected - heading to goal")
+        robot.stop()
+        robot_running.clear()
+
+
 def robot_executor():
     while True:
         robot_running.wait()
@@ -583,8 +620,19 @@ def robot_executor():
         if wp_type == NAV:
             robot.motor_stop()
             time.sleep(0.2)
-            # Quick route check: verify remaining waypoints still make sense
-            # (next BALL in route should still be visible; if route is empty, done)
+            # Check route: is the next BALL waypoint still backed by a real ball?
+            with route_lock:
+                next_wp = current_route[0] if current_route else None
+            if next_wp is not None and next_wp[2] == BALL and last_H_px_world is not None:
+                target = (next_wp[0], next_wp[1])
+                all_balls = (
+                    [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in last_whites_px] +
+                    [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in last_oranges_px]
+                )
+                if not any(_dist(target, b) < 80 for b in all_balls):
+                    print("[robot] Ball at next waypoint gone - replanning")
+                    _replan_from_camera()
+                    continue
             with route_lock:
                 remaining = len(current_route)
             print("[robot] NAV reached - {} waypoints left".format(remaining))
@@ -592,36 +640,7 @@ def robot_executor():
         elif wp_type == BALL:
             # Wait for the collected ball to leave the camera frame
             time.sleep(1.5)
-
-            # Wait up to 3 s for homography to be available
-            wait_end = time.time() + 3.0
-            while last_H_px_world is None and time.time() < wait_end:
-                time.sleep(0.1)
-
-            if last_H_px_world is None:
-                print("[robot] No homography - cannot replan, stopping")
-                robot_running.clear()
-                continue
-
-            global last_route
-            cross_mm = (last_cross["center_mm"] if last_cross
-                        else (BOARD_WIDTH_MM / 2.0, BOARD_HEIGHT_MM / 2.0))
-            w_mm = [pixel_to_world((x, y), last_H_px_world)
-                    for (x, y, r) in last_whites_px]
-            o_mm = [pixel_to_world((x, y), last_H_px_world)
-                    for (x, y, r) in last_oranges_px]
-            new_route = plan_route(w_mm, o_mm, start_mm, cross_mm, last_goals)
-            last_route = new_route  # update display
-            with route_lock:
-                current_route.clear()
-                current_route.extend(new_route)
-            if new_route:
-                print("[robot] Replanned: {} waypoints ({}W {}O)".format(
-                    len(new_route), len(w_mm), len(o_mm)))
-            else:
-                print("[robot] All balls collected - heading to goal")
-                robot.stop()
-                robot_running.clear()
+            _replan_from_camera()
 
         elif wp_type == GOAL:
             print("[robot] Ejecting balls into goal...")

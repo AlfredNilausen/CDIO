@@ -95,16 +95,20 @@ def button_watcher():
 threading.Thread(target=button_watcher, daemon=True).start()
 
 
-def turn_left_continuous():
+def turn_left_continuous(speed=None):
+    if speed is None:
+        speed = TURN_SPEED
     motor_collect.on(SpeedPercent(COLLECT_SPEED))
-    motor_right.on(SpeedPercent( TURN_SPEED))
-    motor_left.on( SpeedPercent(-TURN_SPEED))
+    motor_right.on(SpeedPercent( speed))
+    motor_left.on( SpeedPercent(-speed))
 
 
-def turn_right_continuous():
+def turn_right_continuous(speed=None):
+    if speed is None:
+        speed = TURN_SPEED
     motor_collect.on(SpeedPercent(COLLECT_SPEED))
-    motor_right.on(SpeedPercent(-TURN_SPEED))
-    motor_left.on( SpeedPercent( TURN_SPEED))
+    motor_right.on(SpeedPercent(-speed))
+    motor_left.on( SpeedPercent( speed))
 
 
 def drive_fwd_continuous(speed=None):
@@ -157,11 +161,13 @@ def handle(cmd):
         return {"status": "stopped"}
 
     if t == "turn_left":
-        turn_left_continuous()
+        speed = cmd.get("speed", None)
+        turn_left_continuous(int(speed) if speed is not None else None)
         return {"status": "turning_left"}
 
     if t == "turn_right":
-        turn_right_continuous()
+        speed = cmd.get("speed", None)
+        turn_right_continuous(int(speed) if speed is not None else None)
         return {"status": "turning_right"}
 
     if t == "drive_fwd":

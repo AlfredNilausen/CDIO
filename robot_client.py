@@ -131,29 +131,28 @@ class RobotClient:
 
     # ── Camera-guided turn ───────────────────────────────────────────────────
 
-    def turn_to_heading(self, target_heading, get_heading_fn,
-                        overshoot_comp=8.0, timeout=12.0, stop_fn=None):
-        """
-        Polls get_heading_fn() until heading reaches target_heading.
-        Returns True on success, False on timeout / no heading / stop request.
-        """
-        if not self.connected:
-            return True
-
-        # Wait up to 5 s for a valid heading before computing diff.
-        # Never fall back to 0.0 -- that produces a completely wrong turn.
-        h = None
-        wait_end = time.time() + 5.0
-        while time.time() < wait_end:
+    def _read_settled_heading(self, get_heading_fn, samples=3, gap=0.03):
+        """Smoothed heading after a brief settle, to avoid reacting to a
+        single noisy frame (e.g. vibration right after a motor stop)."""
+        time.sleep(0.2)
+        vals = []
+        for _ in range(samples):
             h = get_heading_fn()
             if h is not None:
-                break
-            time.sleep(0.03)
+                vals.append(h)
+            time.sleep(gap)
+        if not vals:
+            return None
+        return self._circular_mean(vals) if len(vals) > 1 else vals[0]
 
-        if h is None:
-            print("[robot] No heading - skipping turn")
-            return False
-
+    def _turn_pass(self, target_heading, h, get_heading_fn, overshoot_comp,
+                   timeout, stop_fn):
+        """
+        One turning pass from a known current heading `h`: pick direction,
+        send the turn command, poll (3-sample circular-mean smoothing) until
+        within overshoot_comp degrees of target, then stop.
+        Returns True (aligned/turned), False (timeout or stop requested).
+        """
         diff = self._angle_diff(target_heading, h)
         if abs(diff) < 2.0:
             return True
@@ -180,14 +179,71 @@ class RobotClient:
                 remaining = self._angle_diff(target_heading, h)
                 if sign_dir * remaining <= overshoot_comp:
                     self._send({"type": "motor_stop"})
-                    time.sleep(0.3)
                     return True
 
             time.sleep(0.04)
 
         self._send({"type": "motor_stop"})
-        print("[robot] Turn timeout after {:.1f}s".format(timeout))
         return False
+
+    def turn_to_heading(self, target_heading, get_heading_fn,
+                        overshoot_comp=8.0, timeout=12.0, stop_fn=None,
+                        tol=3.0, max_corrections=2):
+        """
+        Turns to target_heading with a coarse momentum-compensated pass,
+        then verifies against a settled/smoothed reading and re-runs the
+        same proven turning pass (same speed, same mechanism) with a small
+        overshoot margin to clean up any residual error, instead of a
+        separate low-speed pulse scheme (which hit motor stiction/overshoot
+        at low duty cycle and made things worse).
+        Returns True on success, False on timeout / no heading / stop request.
+        """
+        if not self.connected:
+            return True
+
+        # Wait up to 5 s for a valid heading before computing diff.
+        # Never fall back to 0.0 -- that produces a completely wrong turn.
+        h = None
+        wait_end = time.time() + 5.0
+        while time.time() < wait_end:
+            h = get_heading_fn()
+            if h is not None:
+                break
+            time.sleep(0.03)
+
+        if h is None:
+            print("[robot] No heading - skipping turn")
+            return False
+
+        if not self._turn_pass(target_heading, h, get_heading_fn,
+                               overshoot_comp, timeout, stop_fn):
+            if stop_fn and stop_fn():
+                return False
+            print("[robot] Turn timeout after {:.1f}s".format(timeout))
+            return False
+
+        for _ in range(max_corrections):
+            if stop_fn and stop_fn():
+                return False
+            h = self._read_settled_heading(get_heading_fn)
+            if h is None:
+                break
+            err = abs(self._angle_diff(target_heading, h))
+            if err <= tol:
+                return True
+            print("[robot] Residual {:.1f}deg - correcting".format(err))
+            if not self._turn_pass(target_heading, h, get_heading_fn,
+                                   2.0, 3.0, stop_fn):
+                if stop_fn and stop_fn():
+                    return False
+                break
+
+        h = self._read_settled_heading(get_heading_fn)
+        if h is not None:
+            err = abs(self._angle_diff(target_heading, h))
+            if err > tol:
+                print("[robot] Turn finished, residual error {:.1f}deg".format(err))
+        return True
 
 
 _client = RobotClient()
