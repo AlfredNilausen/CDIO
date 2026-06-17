@@ -25,13 +25,16 @@ from geometry import intersect_horizontal_vertical
 
 DISPLAY_SCALE = 0.5
 
-# relative to robot center (mm)
+# relative to robot center (ArUco marker position), in mm
 MARKER_OFFSETS_MM = {
     "FL": (0,  -85),
     "FR": ( 0,  85),
     "BL": (-490, -85),
     "BR": ( -490, 85),
 }
+
+# Distance from front marker row to back marker row along heading direction
+ROBOT_LENGTH_MM = abs(MARKER_OFFSETS_MM["BL"][0])  # 490
 
 # green detection
 GREEN_H_MIN = 25
@@ -324,40 +327,65 @@ while True:
     centers = []
 
     # -------------------------------------------------------------
-    # ASSIGNMENT  (heading-aware, works for 2 or 4 markers)
+    # ASSIGNMENT  (robust: matches expected robot length, not blob position)
     #
-    # Uses ArUco heading to tell front blobs from back blobs.
-    # Physical markers: FL (front-left) and BR (back-right).
-    # With 4 blobs also FR and BL are used.
+    # For 4 blobs: split 2 most-forward / 2 least-forward by heading.
+    # For 2-3 blobs: pick the pair whose forward-separation is closest
+    #   to ROBOT_LENGTH_MM.  This rejects stray noise blobs naturally.
+    # Lateral offset (±85mm) is ignored - it is small and its error
+    #   cancels when averaging the front and back estimates.
     # -------------------------------------------------------------
 
     if len(blobs_px) >= 2:
 
-        # Convert ArUco center to world to get reference point for direction
-        aruco_world = pixel_to_world(aruco_pose["center_px"], H_px_to_world)
-        ax, ay = aruco_world
+        ax, ay = pixel_to_world(aruco_pose["center_px"], H_px_to_world)
         hx = math.cos(math.radians(heading))
         hy = math.sin(math.radians(heading))
 
-        # Score each blob by how far forward it is from the ArUco center.
-        # This correctly identifies front vs back regardless of robot orientation.
         blobs_world = [pixel_to_world(p, H_px_to_world) for p in blobs_px]
-        scored = sorted(
-            blobs_world,
-            key=lambda b: (b[0] - ax) * hx + (b[1] - ay) * hy,
-            reverse=True  # most forward first
-        )
 
-        # Most forward blob = FL, most backward = BR (diagonal pair)
-        for label, (bx, by) in [("FL", scored[0]), ("BR", scored[-1])]:
-            off_x, off_y = rotate_offset(MARKER_OFFSETS_MM[label], heading)
-            centers.append((bx - off_x, by - off_y))
+        front_x = front_y = back_x = back_y = None
 
-        # If all 4 blobs visible, use FR (2nd forward) and BL (2nd backward) too
-        if len(scored) >= 4:
-            for label, (bx, by) in [("FR", scored[1]), ("BL", scored[-2])]:
-                off_x, off_y = rotate_offset(MARKER_OFFSETS_MM[label], heading)
-                centers.append((bx - off_x, by - off_y))
+        if len(blobs_world) >= 4:
+            # 4 markers: average 2 most-forward (front row) and 2 least-forward (back row)
+            by_fwd = sorted(blobs_world,
+                            key=lambda b: (b[0]-ax)*hx + (b[1]-ay)*hy,
+                            reverse=True)
+            front_x = (by_fwd[0][0] + by_fwd[1][0]) / 2
+            front_y = (by_fwd[0][1] + by_fwd[1][1]) / 2
+            back_x  = (by_fwd[-2][0] + by_fwd[-1][0]) / 2
+            back_y  = (by_fwd[-2][1] + by_fwd[-1][1]) / 2
+
+        else:
+            # 2-3 blobs: find the pair whose heading-direction separation
+            # is closest to the known robot length.  Noise blobs at wrong
+            # distances are automatically skipped.
+            best_err = float('inf')
+            for i in range(len(blobs_world)):
+                for j in range(i + 1, len(blobs_world)):
+                    b1, b2 = blobs_world[i], blobs_world[j]
+                    fwd = (b1[0]-b2[0])*hx + (b1[1]-b2[1])*hy
+                    if fwd < 0:          # ensure b1 is the more-forward blob
+                        b1, b2 = b2, b1
+                        fwd = -fwd
+                    err = abs(fwd - ROBOT_LENGTH_MM)
+                    if err < best_err:
+                        best_err = err
+                        front_x, front_y = b1
+                        back_x,  back_y  = b2
+
+            if best_err >= 150:          # no plausible front-back pair → skip
+                front_x = None
+
+        if front_x is not None:
+            # Estimate ArUco center from front blob (front markers sit at ArUco, ±85mm lateral)
+            cx_f = front_x
+            cy_f = front_y
+            # Estimate ArUco center from back blob (490mm ahead of back markers)
+            cx_b = back_x + ROBOT_LENGTH_MM * hx
+            cy_b = back_y + ROBOT_LENGTH_MM * hy
+            # Average both - lateral errors cancel for diagonal pairs, ≤85mm otherwise
+            centers = [((cx_f + cx_b) / 2, (cy_f + cy_b) / 2)]
 
     if centers:
 
