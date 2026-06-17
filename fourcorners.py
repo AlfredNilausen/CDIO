@@ -34,7 +34,7 @@ MARKER_OFFSETS_MM = {
 }
 
 # Distance from front marker row to back marker row along heading direction
-ROBOT_LENGTH_MM = abs(MARKER_OFFSETS_MM["BL"][0])  # 490
+ROBOT_LENGTH_MM = abs(MARKER_OFFSETS_MM["BL"][0])
 
 # green detection
 GREEN_H_MIN = 25
@@ -359,7 +359,7 @@ while True:
         else:
             # 2-3 blobs: find the pair whose heading-direction separation
             # is closest to the known robot length.  Noise blobs at wrong
-            # distances are automatically skipped.
+            # distances are automatically pushed to lower priority.
             best_err = float('inf')
             for i in range(len(blobs_world)):
                 for j in range(i + 1, len(blobs_world)):
@@ -373,9 +373,6 @@ while True:
                         best_err = err
                         front_x, front_y = b1
                         back_x,  back_y  = b2
-
-            if best_err >= 150:          # no plausible front-back pair → skip
-                front_x = None
 
         if front_x is not None:
             # Estimate ArUco center from front blob (front markers sit at ArUco, ±85mm lateral)
