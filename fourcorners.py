@@ -324,46 +324,40 @@ while True:
     centers = []
 
     # -------------------------------------------------------------
-    # ASSIGNMENT
+    # ASSIGNMENT  (heading-aware, works for 2 or 4 markers)
     #
-    # For first test:
-    # Put ONLY TWO GREEN MARKERS:
-    #
-    # FL and BR
-    #
-    # Then assignment is deterministic.
-    #
-    # Later we can improve.
+    # Uses ArUco heading to tell front blobs from back blobs.
+    # Physical markers: FL (front-left) and BR (back-right).
+    # With 4 blobs also FR and BL are used.
     # -------------------------------------------------------------
 
     if len(blobs_px) >= 2:
 
-        blobs_px = sorted(
-            blobs_px,
-            key=lambda p: p[0]
+        # Convert ArUco center to world to get reference point for direction
+        aruco_world = pixel_to_world(aruco_pose["center_px"], H_px_to_world)
+        ax, ay = aruco_world
+        hx = math.cos(math.radians(heading))
+        hy = math.sin(math.radians(heading))
+
+        # Score each blob by how far forward it is from the ArUco center.
+        # This correctly identifies front vs back regardless of robot orientation.
+        blobs_world = [pixel_to_world(p, H_px_to_world) for p in blobs_px]
+        scored = sorted(
+            blobs_world,
+            key=lambda b: (b[0] - ax) * hx + (b[1] - ay) * hy,
+            reverse=True  # most forward first
         )
 
-        labels = ["FL", "BR"]
+        # Most forward blob = FL, most backward = BR (diagonal pair)
+        for label, (bx, by) in [("FL", scored[0]), ("BR", scored[-1])]:
+            off_x, off_y = rotate_offset(MARKER_OFFSETS_MM[label], heading)
+            centers.append((bx - off_x, by - off_y))
 
-        for blob_px, label in zip(
-            blobs_px[:2],
-            labels
-        ):
-
-            bx, by = pixel_to_world(
-                blob_px,
-                H_px_to_world
-            )
-
-            off_x, off_y = rotate_offset(
-                MARKER_OFFSETS_MM[label],
-                heading
-            )
-
-            cx = bx - off_x
-            cy = by - off_y
-
-            centers.append((cx, cy))
+        # If all 4 blobs visible, use FR (2nd forward) and BL (2nd backward) too
+        if len(scored) >= 4:
+            for label, (bx, by) in [("FR", scored[1]), ("BL", scored[-2])]:
+                off_x, off_y = rotate_offset(MARKER_OFFSETS_MM[label], heading)
+                centers.append((bx - off_x, by - off_y))
 
     if centers:
 
