@@ -29,8 +29,8 @@ DISPLAY_SCALE = 0.5
 MARKER_OFFSETS_MM = {
     "FL": (0,  -85),
     "FR": ( 0,  85),
-    "BL": (-490, -85),
-    "BR": ( -490, 85),
+    "BL": (-370, -85),
+    "BR": ( -370, 85),
 }
 
 # Distance from front marker row to back marker row along heading direction
@@ -39,10 +39,10 @@ ROBOT_LENGTH_MM = abs(MARKER_OFFSETS_MM["BL"][0])  # 490
 # green detection
 GREEN_H_MIN = 25
 GREEN_H_MAX = 95
-GREEN_S_MIN = 50
-GREEN_V_MIN = 50
+GREEN_S_MIN = 40
+GREEN_V_MIN = 40
 
-MIN_BLOB_AREA = 60
+MIN_BLOB_AREA = 10
 
 ROBOT_MARKER_ID = 0
 ARUCO_DICT = cv2.aruco.DICT_4X4_50
