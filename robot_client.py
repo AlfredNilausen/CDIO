@@ -9,7 +9,7 @@ import json
 import math
 import time
 
-EV3_HOST = "192.168.137.3"
+EV3_HOST = "192.168.0.1"
 EV3_PORT = 9999
 TIMEOUT  = 30
 
@@ -83,7 +83,7 @@ class RobotClient:
         return self._send(cmd)
 
     def drive_to_position(self, target_mm, get_pos_fn, reverse=False,
-                          tol_mm=50, speed=None, timeout=15.0, stop_fn=None,
+                          tol_mm=50, speed=30, timeout=15.0, stop_fn=None,
                           get_heading_fn=None):
         """
         Starts continuous drive, polls get_pos_fn() (returns (x,y) mm or None),

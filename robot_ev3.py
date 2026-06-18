@@ -35,7 +35,7 @@ PORT           = 9999
 WHEEL_BASE_MM  = 120
 WHEEL_DIAM_MM  = 56
 
-DRIVE_SPEED    = 20
+DRIVE_SPEED    = 30
 BALL_SPEED     = 10   # slower when sweeping through a ball
 TURN_SPEED     = 10
 COLLECT_SPEED  = 30
@@ -217,26 +217,37 @@ def main():
         conn, addr = srv.accept()
         print("PC forbundet: {}".format(addr))
         buf = b""
+
         try:
             while True:
-                chunk = conn.recv(4096)
-                if not chunk:
+                try:
+                    chunk = conn.recv(4096)
+                except ConnectionResetError:
+                    print("Client reset connection:", addr)
                     break
+
+                if not chunk:
+                    print("Client disconnected:", addr)
+                    break
+
                 buf += chunk
+
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
+
                     if not line.strip():
-                        continue
+                      continue
+
                     try:
-                        cmd  = json.loads(line.decode())
-                        resp = handle(cmd)
-                        conn.sendall((json.dumps(resp) + "\n").encode())
-                        print("  {} -> {}".format(cmd.get("type"), resp.get("status")))
+                       cmd = json.loads(line.decode())
+                       resp = handle(cmd)
+                       conn.sendall((json.dumps(resp) + "\n").encode())
+
                     except Exception as e:
-                        err = {"status": "error", "msg": str(e)}
-                        conn.sendall((json.dumps(err) + "\n").encode())
+                        print("Command error:", e)
+
         finally:
-            conn.close()
+           conn.close()
 
 
 if __name__ == "__main__":

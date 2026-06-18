@@ -27,44 +27,56 @@ robot.connect()
 # CONFIG
 # ════════════════════════════════════════════════════════════════════════════
 
-CAMERA_INDEX       = 0
+CAMERA_INDEX       = 1
 DISPLAY_SCALE      = 0.5
 SMOOTH_ALPHA       = 0.80
 
 ARUCO_DICT         = aruco.DICT_4X4_50
 ROBOT_MARKER_ID    = 0
-HEADING_OFFSET_DEG = 0
+HEADING_OFFSET_DEG = 0.0
 MARKER_SIZE_MM     = 80
 
-WALL_MARGIN_MM     = 200    # ball within this distance of a wall = wall ball
-WALL_APPROACH_MM   = 180    # perpendicular approach point distance from wall ball
-CROSS_MARGIN_MM    = 150    # exclusion radius around detected cross center
-POSITION_TOL_MM    = 50     # waypoint considered reached within this distance
-APPROACH_OFFSET_MM = 40     # stop this far short of ball (brush sweeps it in)
-GOAL_MIN_GAP_MM    = 60     # minimum gap width to count as a goal opening
-GOAL_APPROACH_MM   = 220    # approach point distance inside field from goal
+WALL_MARGIN_MM     = 150
+WALL_APPROACH_MM   = 180
+CROSS_MARGIN_MM    = 150
+POSITION_TOL_MM    = 50
+APPROACH_OFFSET_MM = 40
+GOAL_MIN_GAP_MM    = 60
+GOAL_APPROACH_MM   = 220
 
-TURN_TIMEOUT_S     = 12.0
-ROUTE_INTERVAL_S   = 3.0    # auto-refresh display route while idle
-BALL_DRIVE_SPEED   = 10     # slow speed sent to EV3 when sweeping through a ball
-REVERSE_THRESHOLD    = 181    # disabled: always turn and drive forward (was 100)
+TURN_TIMEOUT_S     = 1.5
+ROUTE_INTERVAL_S   = 3.0
+BALL_DRIVE_SPEED   = 10
+REVERSE_THRESHOLD  = 181
 
-HEADING_SMOOTH_ALPHA = 0.50   # heading EMA per frame (higher = more smoothing / more lag)
-POSE_SMOOTH_ALPHA    = 0.60   # position EMA per frame
+HEADING_SMOOTH_ALPHA = 0.15
+POSE_SMOOTH_ALPHA    = 0.60
 
-# Green corner markers on robot (parallax-free robot position)
+# --- NEW GREEN TRACKING GEOMETRY ---
 GREEN_H_MIN      = 25
 GREEN_H_MAX      = 95
-GREEN_S_MIN      = 40
-GREEN_V_MIN      = 40
-GREEN_MIN_AREA   = 10
-ROBOT_LENGTH_MM  = 370   # mm between front and back green marker rows
-GREEN_MAX_DIST_PX = 350  # reject green blobs further than this from ArUco (pixels)
+GREEN_S_MIN      = 50
+GREEN_V_MIN      = 50
+MIN_BLOB_AREA    = 60
+
+ROBOT_WIDTH_MM   = 185.0
+ROBOT_LENGTH_MM  = 280.0
+HALF_W           = ROBOT_WIDTH_MM / 2.0
+LENGTH           = ROBOT_LENGTH_MM
+SIDE_SIGN        = 1.0
+MAX_HISTORY_ASSIGN_MM = 220.0
+
+MODEL = {
+    "FL": (0.0,      -HALF_W),
+    "FR": (0.0,       HALF_W),
+    "BL": (-LENGTH,  -HALF_W),
+    "BR": (-LENGTH,   HALF_W),
+}
 
 # Waypoint type constants
-NAV  = "nav"   # navigation point, no action on arrival
-BALL = "ball"  # collect ball on arrival
-GOAL = "goal"  # eject balls on arrival
+NAV  = "nav"
+BALL = "ball"
+GOAL = "goal"
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -140,14 +152,10 @@ def detect_balls(frame, cfg):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# CROSS DETECTION  (position from camera, never hardcoded)
+# CROSS & GOAL DETECTION
 # ════════════════════════════════════════════════════════════════════════════
 
 def detect_cross(world_img_raw, scale=DISPLAY_SCALE):
-    """
-    Finds the red cross in the central 50% of the world-view image.
-    Returns dict with center_mm / center_view / contour, or None.
-    """
     hsv  = cv2.cvtColor(world_img_raw, cv2.COLOR_BGR2HSV)
     mask = red_mask(hsv)
     h_i, w_i = mask.shape
@@ -180,13 +188,7 @@ def detect_cross(world_img_raw, scale=DISPLAY_SCALE):
         "contour":     cnt,
     }
 
-
-# ════════════════════════════════════════════════════════════════════════════
-# GOAL DETECTION  (gaps in the red border = goal openings)
-# ════════════════════════════════════════════════════════════════════════════
-
 def _find_gaps(has_red, min_len):
-    """Return list of (start, end) index pairs for False runs >= min_len."""
     gaps, start = [], None
     for i, v in enumerate(has_red):
         if not v and start is None:
@@ -199,13 +201,7 @@ def _find_gaps(has_red, min_len):
         gaps.append((start, len(has_red)))
     return gaps
 
-
 def detect_goals(world_img_raw, scale=DISPLAY_SCALE):
-    """
-    Scans the four border edges of the rectified world image for gaps.
-    Gaps wider than GOAL_MIN_GAP_MM are goal openings.
-    Returns list of (x_mm, y_mm) goal center positions.
-    """
     hsv  = cv2.cvtColor(world_img_raw, cv2.COLOR_BGR2HSV)
     mask = red_mask(hsv)
     h_i, w_i = mask.shape
@@ -213,22 +209,18 @@ def detect_goals(world_img_raw, scale=DISPLAY_SCALE):
     min_gap = max(3, int(GOAL_MIN_GAP_MM * scale))
     goals   = []
 
-    # Bottom wall  (world y=0,           image rows near bottom)
     strip = mask[max(0, h_i - border):h_i, :]
     for gx0, gx1 in _find_gaps(np.any(strip > 0, axis=0), min_gap):
         goals.append(((gx0 + gx1) / 2.0 / scale, 0.0))
 
-    # Top wall     (world y=BOARD_HEIGHT, image rows near top)
     strip = mask[0:border, :]
     for gx0, gx1 in _find_gaps(np.any(strip > 0, axis=0), min_gap):
         goals.append(((gx0 + gx1) / 2.0 / scale, float(BOARD_HEIGHT_MM)))
 
-    # Left wall    (world x=0,           image cols near left)
     strip = mask[:, 0:border]
     for gy0, gy1 in _find_gaps(np.any(strip > 0, axis=1), min_gap):
         goals.append((0.0, BOARD_HEIGHT_MM - (gy0 + gy1) / 2.0 / scale))
 
-    # Right wall   (world x=BOARD_WIDTH,  image cols near right)
     strip = mask[:, max(0, w_i - border):w_i]
     for gy0, gy1 in _find_gaps(np.any(strip > 0, axis=1), min_gap):
         goals.append((float(BOARD_WIDTH_MM),
@@ -252,12 +244,6 @@ _OBJ_PTS        = np.array([
     [-_half, -_half, 0],
 ], dtype=np.float32)
 
-# Board corners in world mm (Z=0), in the same BL/TL/TR/BR order used
-# everywhere else (see compute_homographies). Used to recover the camera's
-# true 3D pose so marker parallax can be corrected exactly, even when the
-# camera looks at the board at an angle (each corner then sits at a
-# different distance from the camera, which a single height/nadir scalar
-# can't capture).
 _BOARD_OBJ_PTS = np.array([
     [0,              0,               0],
     [0,              BOARD_HEIGHT_MM, 0],
@@ -265,75 +251,39 @@ _BOARD_OBJ_PTS = np.array([
     [BOARD_WIDTH_MM, 0,               0],
 ], dtype=np.float32)
 
-
 def _line_intersect(p1, p2, p3, p4):
-    """Intersection of line p1-p2 with line p3-p4, or None if parallel."""
     x1, y1 = p1; x2, y2 = p2; x3, y3 = p3; x4, y4 = p4
     d = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
-    if abs(d) < 1e-9:
-        return None
+    if abs(d) < 1e-9: return None
     px = ((x1*y2 - y1*x2)*(x3-x4) - (x1-x2)*(x3*y4 - y3*x4)) / d
     py = ((x1*y2 - y1*x2)*(y3-y4) - (y1-y2)*(x3*y4 - y3*x4)) / d
     return px, py
 
-
 def estimate_focal_length(corners_px, principal_point):
-    """
-    Self-calibrates focal length from the board's known rectangular shape
-    (single-view calibration from a rectangle): the top/bottom edges are
-    parallel in 3D and meet at a vanishing point VP1 in the image, same for
-    the left/right edges -> VP2. Since those two edge directions are
-    perpendicular in 3D, f^2 = -(VP1-p).(VP2-p). This replaces the guessed
-    focal length with a real one derived from the camera's actual tilt, so
-    both heading and position solvePnP calls stop drifting depending on
-    where in the frame / which way the robot is.
-    Returns None if the board is too close to fronto-parallel for the
-    vanishing points to be well-defined.
-    """
     TL, TR = corners_px["TL"], corners_px["TR"]
     BL, BR = corners_px["BL"], corners_px["BR"]
     vp1 = _line_intersect(TL, TR, BL, BR)
     vp2 = _line_intersect(TL, BL, TR, BR)
-    if vp1 is None or vp2 is None:
-        return None
+    if vp1 is None or vp2 is None: return None
     px, py = principal_point
     dot = (vp1[0]-px)*(vp2[0]-px) + (vp1[1]-py)*(vp2[1]-py)
     f_sq = -dot
-    if f_sq <= 0:
-        return None
+    if f_sq <= 0: return None
     f = math.sqrt(f_sq)
-    # Near fronto-parallel, the vanishing points shoot toward infinity and
-    # tiny corner-pixel noise swings f wildly - reject anything implausible
-    # rather than let one bad frame corrupt the smoothed estimate.
     diag = math.hypot(2*px, 2*py)
-    if not (0.3*diag <= f <= 6*diag):
-        return None
+    if not (0.3*diag <= f <= 6*diag): return None
     return f
 
-
-_focal_length_est = None  # smoothed self-calibrated focal length (px)
-
+_focal_length_est = None
 
 def _camera_matrix(frame_shape):
-    """Pinhole intrinsics: uses the self-calibrated focal length once
-    estimate_focal_length() has warmed up, falling back to a rough guess
-    until then. Used consistently for both the marker and board solvePnP
-    calls so their relative pose stays correct even before warm-up."""
     H, W = frame_shape[:2]
     f    = _focal_length_est if _focal_length_est is not None else max(W, H)
     cam  = np.array([[f, 0, W/2], [0, f, H/2], [0, 0, 1]], dtype=np.float64)
     dist = np.zeros((5, 1), dtype=np.float64)
     return cam, dist
 
-
 def board_pose(corners_px, cam_mat, dist_coef):
-    """
-    Solves for the camera's pose relative to the board's world frame (Z=0)
-    using the 4 known board corners. Returns (R, t) such that for any world
-    point P_world, its camera-frame position is P_cam = R @ P_world + t -
-    or None if the solve fails. This captures the true geometry of a tilted
-    camera (corners at different distances), unlike a single height scalar.
-    """
     img_pts = np.array([
         corners_px["BL"], corners_px["TL"], corners_px["TR"], corners_px["BR"],
     ], dtype=np.float32)
@@ -341,42 +291,28 @@ def board_pose(corners_px, cam_mat, dist_coef):
         _BOARD_OBJ_PTS, img_pts, cam_mat, dist_coef,
         flags=cv2.SOLVEPNP_IPPE,
     )
-    if not ok:
-        return None
+    if not ok: return None
     R, _ = cv2.Rodrigues(rvec)
     return R, tvec
 
-
 def marker_ground_position(tvec_marker, pose):
-    """
-    Transforms the marker's camera-frame 3D position (from detect_heading's
-    tvec) into world (X, Y) mm using the calibrated board pose, then drops
-    the height (Z) component to get the marker's ground footprint - the
-    point on the board directly below it, which is what the robot actually
-    drives to. Exact for any camera angle, no height measurement needed.
-    """
     R, t = pose
     p_world = (R.T @ (tvec_marker - t)).flatten()
     return float(p_world[0]), float(p_world[1])
 
-
 def detect_heading(frame):
-    """Returns dict with found/heading/center_px, or {found: False}."""
     cam, dist = _camera_matrix(frame.shape)
     gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     corners, ids, _ = _aruco_detector.detectMarkers(gray)
-    if ids is None:
-        return {"found": False}
+    if ids is None: return {"found": False}
     for i, mid in enumerate(ids.flatten()):
-        if mid != ROBOT_MARKER_ID:
-            continue
+        if mid != ROBOT_MARKER_ID: continue
         mc = corners[i][0]
         ok, rvec, tvec = cv2.solvePnP(
             _OBJ_PTS, mc.astype(np.float32), cam, dist,
             flags=cv2.SOLVEPNP_IPPE_SQUARE,
         )
-        if not ok:
-            continue
+        if not ok: continue
         R, _ = cv2.Rodrigues(rvec)
         heading = math.degrees(math.atan2(-R[1, 0], R[0, 0])) + HEADING_OFFSET_DEG
         return {
@@ -391,204 +327,253 @@ def detect_heading(frame):
     return {"found": False}
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# NEW RIGID BODY GREEN BLOB TRACKING
+# ════════════════════════════════════════════════════════════════════════════
+
+def add2(a, b): return (a[0] + b[0], a[1] + b[1])
+def sub2(a, b): return (a[0] - b[0], a[1] - b[1])
+def mul2(v, k): return (v[0] * k, v[1] * k)
+def dot2(a, b): return a[0] * b[0] + a[1] * b[1]
+def dist2(a, b): return math.hypot(a[0] - b[0], a[1] - b[1])
+def norm2(v):
+    n = math.hypot(v[0], v[1])
+    return (0.0, 0.0) if n < 1e-9 else (v[0] / n, v[1] / n)
+def midpoint(a, b): return ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+def heading_unit(heading_deg):
+    a = math.radians(heading_deg)
+    return (math.cos(a), math.sin(a))
+def side_unit_from_heading(heading_deg):
+    f = heading_unit(heading_deg)
+    return (SIDE_SIGN * (-f[1]), SIDE_SIGN * f[0])
+
+def world_from_top(top_center, label, heading_deg):
+    f = heading_unit(heading_deg)
+    s = side_unit_from_heading(heading_deg)
+    xf, ys = MODEL[label]
+    return (top_center[0] + xf * f[0] + ys * s[0], top_center[1] + xf * f[1] + ys * s[1])
+
+def top_from_known_marker(pt_world, label, heading_deg):
+    f = heading_unit(heading_deg)
+    s = side_unit_from_heading(heading_deg)
+    xf, ys = MODEL[label]
+    return (pt_world[0] - xf * f[0] - ys * s[0], pt_world[1] - xf * f[1] - ys * s[1])
+
+def solve_from_any_labeled_points(labels_found, heading_deg):
+    usable = {k: v for k, v in labels_found.items() if k in MODEL}
+    if not usable: return None, None
+    top_candidates = [top_from_known_marker(pt, label, heading_deg) for label, pt in usable.items()]
+    tx = sum(p[0] for p in top_candidates) / len(top_candidates)
+    ty = sum(p[1] for p in top_candidates) / len(top_candidates)
+    top_center = (tx, ty)
+    solved = {}
+    for label in MODEL.keys():
+        solved[label] = usable[label] if label in usable else world_from_top(top_center, label, heading_deg)
+    return solved, top_center
+
+def compute_front_normal(fl, fr, heading_deg):
+    edge = (fr[0] - fl[0], fr[1] - fl[1])
+    n1 = norm2((-edge[1], edge[0]))
+    n2 = (-n1[0], -n1[1])
+    h = heading_unit(heading_deg)
+    return n2 if dot2(n2, h) > dot2(n1, h) else n1
+
 def detect_green_blobs(frame):
-    """Returns list of (x, y) pixel centroids for every green marker found."""
     hsv  = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv,
-                       (GREEN_H_MIN, GREEN_S_MIN, GREEN_V_MIN),
-                       (GREEN_H_MAX, 255, 255))
-    k    = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  k)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
+    mask = cv2.inRange(hsv, (GREEN_H_MIN, GREEN_S_MIN, GREEN_V_MIN), (GREEN_H_MAX, 255, 255))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     blobs = []
     for c in cnts:
-        if cv2.contourArea(c) < GREEN_MIN_AREA:
-            continue
+        if cv2.contourArea(c) < MIN_BLOB_AREA: continue
         M = cv2.moments(c)
-        if abs(M["m00"]) < 1e-6:
-            continue
+        if abs(M["m00"]) < 1e-6: continue
         blobs.append((int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])))
     return blobs
 
+def classify_visible_blobs(blobs_world, heading_deg, aruco_center_world):
+    f = heading_unit(heading_deg)
+    s = side_unit_from_heading(heading_deg)
+    pts = [{"pt": p, "pf": dot2(p, f), "ps": dot2(p, s)} for p in blobs_world]
+    n = len(pts)
+    labels = {}
+    if n == 0: return {}, "none"
 
-def robot_pos_from_green_blobs(blobs_px, heading, aruco_px, H_px_to_world):
-    """
-    Estimates robot center (world mm) from green corner markers.
-    Uses ArUco heading to identify front vs back blobs, then finds the pair
-    whose heading-direction separation best matches ROBOT_LENGTH_MM.
-    Returns (x_mm, y_mm) or None if fewer than 2 blobs detected.
-    """
-    # Discard blobs that are far from the ArUco marker in camera pixel space.
-    # Genuine robot markers are physically close; floor reflections / cable noise is not.
-    aruco_px_f = aruco_px
-    blobs_px = [(bx, by) for bx, by in blobs_px
-                if math.hypot(bx - aruco_px_f[0], by - aruco_px_f[1]) < GREEN_MAX_DIST_PX]
+    if n == 4:
+        pts_sorted = sorted(pts, key=lambda t: t["pf"], reverse=True)
+        front = sorted(pts_sorted[:2], key=lambda t: t["ps"])
+        back = sorted(pts_sorted[2:], key=lambda t: t["ps"])
+        labels["FL"] = front[0]["pt"]; labels["FR"] = front[1]["pt"]
+        labels["BL"] = back[0]["pt"];  labels["BR"] = back[1]["pt"]
+        return labels, "4pts"
 
-    if len(blobs_px) < 2:
-        return None
+    if n == 3:
+        pts_sorted = sorted(pts, key=lambda t: t["pf"], reverse=True)
+        span_front = abs(pts_sorted[0]["pf"] - pts_sorted[1]["pf"])
+        span_back = abs(pts_sorted[1]["pf"] - pts_sorted[2]["pf"])
+        if span_front < span_back:
+            front = sorted(pts_sorted[:2], key=lambda t: t["ps"])
+            labels["FL"] = front[0]["pt"]; labels["FR"] = front[1]["pt"]
+            rel = sub2(pts_sorted[2]["pt"], aruco_center_world)
+            labels["BL" if dot2(rel, s) < 0 else "BR"] = pts_sorted[2]["pt"]
+            return labels, "3pts_frontpair"
+        else:
+            back = sorted(pts_sorted[1:], key=lambda t: t["ps"])
+            labels["BL"] = back[0]["pt"]; labels["BR"] = back[1]["pt"]
+            rel = sub2(pts_sorted[0]["pt"], aruco_center_world)
+            labels["FL" if dot2(rel, s) < 0 else "FR"] = pts_sorted[0]["pt"]
+            return labels, "3pts_backpair"
 
-    ax, ay = pixel_to_world(aruco_px, H_px_to_world)
-    hx = math.cos(math.radians(heading))
-    hy = math.sin(math.radians(heading))
-    blobs_world = [pixel_to_world(p, H_px_to_world) for p in blobs_px]
+    if n == 2:
+        d = dist2(pts[0]["pt"], pts[1]["pt"])
+        diag = math.hypot(ROBOT_WIDTH_MM, ROBOT_LENGTH_MM)
+        if abs(d - ROBOT_WIDTH_MM) < 45:
+            pair = sorted(pts, key=lambda t: t["ps"])
+            rel = sub2(midpoint(pair[0]["pt"], pair[1]["pt"]), aruco_center_world)
+            if dot2(rel, f) >= 0:
+                labels["FL"] = pair[0]["pt"]; labels["FR"] = pair[1]["pt"]
+                return labels, "2pts_frontrow"
+            else:
+                labels["BL"] = pair[0]["pt"]; labels["BR"] = pair[1]["pt"]
+                return labels, "2pts_backrow"
+        if abs(d - ROBOT_LENGTH_MM) < 50:
+            pair = sorted(pts, key=lambda t: t["pf"], reverse=True)
+            rel = sub2(midpoint(pair[0]["pt"], pair[1]["pt"]), aruco_center_world)
+            if dot2(rel, s) < 0:
+                labels["FL"] = pair[0]["pt"]; labels["BL"] = pair[1]["pt"]
+            else:
+                labels["FR"] = pair[0]["pt"]; labels["BR"] = pair[1]["pt"]
+            return labels, "2pts_side"
+        if abs(d - diag) < 60:
+            pair = sorted(pts, key=lambda t: t["pf"], reverse=True)
+            rel = sub2(pair[0]["pt"], aruco_center_world)
+            if dot2(rel, s) < 0:
+                labels["FL"] = pair[0]["pt"]; labels["BR"] = pair[1]["pt"]
+            else:
+                labels["FR"] = pair[0]["pt"]; labels["BL"] = pair[1]["pt"]
+            return labels, "2pts_diag"
+        return {}, "2pts_unknown"
 
-    if len(blobs_world) >= 4:
-        # 4 markers: average 2 most-forward (front row) + 2 most-backward (back row)
-        by_fwd = sorted(blobs_world,
-                        key=lambda b: (b[0]-ax)*hx + (b[1]-ay)*hy,
-                        reverse=True)
-        front_x = (by_fwd[0][0] + by_fwd[1][0]) / 2
-        front_y = (by_fwd[0][1] + by_fwd[1][1]) / 2
-        back_x  = (by_fwd[-2][0] + by_fwd[-1][0]) / 2
-        back_y  = (by_fwd[-2][1] + by_fwd[-1][1]) / 2
-    else:
-        # 2-3 blobs: find the pair whose heading-direction separation is
-        # closest to the known robot length (rejects stray noise blobs)
-        best_err = float('inf')
-        front_x = front_y = back_x = back_y = None
-        for i in range(len(blobs_world)):
-            for j in range(i + 1, len(blobs_world)):
-                b1, b2 = blobs_world[i], blobs_world[j]
-                fwd = (b1[0]-b2[0])*hx + (b1[1]-b2[1])*hy
-                if fwd < 0:
-                    b1, b2 = b2, b1
-                    fwd = -fwd
-                err = abs(fwd - ROBOT_LENGTH_MM)
-                if err < best_err:
-                    best_err = err
-                    front_x, front_y = b1
-                    back_x,  back_y  = b2
-        if front_x is None:
-            return None
+    if n == 1:
+        p = pts[0]["pt"]
+        rel = sub2(p, aruco_center_world)
+        is_front = dot2(rel, f) >= 0
+        is_left = dot2(rel, s) < 0
+        if is_front and is_left: labels["FL"] = p
+        elif is_front and not is_left: labels["FR"] = p
+        elif not is_front and is_left: labels["BL"] = p
+        else: labels["BR"] = p
+        return labels, "1pt"
 
-    # Average two independent center estimates; lateral errors (±85mm) cancel
-    # for diagonal marker pairs and are at most 85mm for same-side pairs
-    rx = (front_x + back_x + ROBOT_LENGTH_MM * hx) / 2
-    ry = (front_y + back_y + ROBOT_LENGTH_MM * hy) / 2
-    if not (math.isfinite(rx) and math.isfinite(ry)):
-        return None
-    return rx, ry
+    return {}, "unknown"
+
+def assign_using_last_pose(blobs_world, last_solved_markers, max_dist=MAX_HISTORY_ASSIGN_MM):
+    if last_solved_markers is None: return {}
+    labels_found, used_labels = {}, set()
+    for p in blobs_world:
+        best_lab, best_d = None, float("inf")
+        for lab, prev_pt in last_solved_markers.items():
+            if lab in used_labels: continue
+            d = dist2(p, prev_pt)
+            if d < best_d: best_d = d; best_lab = lab
+        if best_lab is not None and best_d <= max_dist:
+            labels_found[best_lab] = p
+            used_labels.add(best_lab)
+    return labels_found
+
+def solve_robot_from_labels(labels_found, case_name, heading_deg, last_top_center=None, last_solved_markers=None):
+    if case_name in ("4pts", "3pts_frontpair", "3pts_backpair", "2pts_frontrow", "2pts_backrow", "2pts_side", "2pts_diag", "1pt"):
+        return solve_from_any_labeled_points(labels_found, heading_deg)
+    if any(k in MODEL for k in labels_found.keys()):
+        return solve_from_any_labeled_points(labels_found, heading_deg)
+    return None, None
 
 
 # ════════════════════════════════════════════════════════════════════════════
 # ROUTE PLANNING
 # ════════════════════════════════════════════════════════════════════════════
 
-def _dist(a, b):
-    return math.hypot(a[0] - b[0], a[1] - b[1])
-
-
+def _dist(a, b): return math.hypot(a[0] - b[0], a[1] - b[1])
 def _seg_dist(p1, p2, pt):
     dx, dy = p2[0] - p1[0], p2[1] - p1[1]
-    if dx == dy == 0:
-        return _dist(p1, pt)
-    t = max(0.0, min(1.0,
-        ((pt[0]-p1[0])*dx + (pt[1]-p1[1])*dy) / (dx*dx + dy*dy)))
+    if dx == dy == 0: return _dist(p1, pt)
+    t = max(0.0, min(1.0, ((pt[0]-p1[0])*dx + (pt[1]-p1[1])*dy) / (dx*dx + dy*dy)))
     return _dist((p1[0] + t*dx, p1[1] + t*dy), pt)
 
-
 def _detour(p1, p2, cross_mm):
-    """Single-bypass avoidance around the cross exclusion zone."""
-    if _seg_dist(p1, p2, cross_mm) >= CROSS_MARGIN_MM:
-        return [p2]
+    if _seg_dist(p1, p2, cross_mm) >= CROSS_MARGIN_MM: return [p2]
     cx, cy = cross_mm
     dx, dy = p2[0] - p1[0], p2[1] - p1[1]
     lsq = dx*dx + dy*dy
-    if lsq < 1e-9:
-        return [p2]
-    # Closest point on segment to cross center
+    if lsq < 1e-9: return [p2]
     t = max(0.0, min(1.0, ((cx - p1[0])*dx + (cy - p1[1])*dy) / lsq))
     clx, cly = p1[0] + t*dx, p1[1] + t*dy
-    # Vector from cross to that closest point
     vx, vy = clx - cx, cly - cy
     mag = math.hypot(vx, vy)
     if mag < 1e-9:
-        # Cross sits exactly on path — push perpendicular to path direction
         pl = math.hypot(dx, dy)
         vx, vy, mag = -dy / pl, dx / pl, 1.0
     push   = CROSS_MARGIN_MM * 1.8
-    bypass = (cx + vx / mag * push, cy + vy / mag * push)
-    return [bypass, p2]
-
+    return [(cx + vx / mag * push, cy + vy / mag * push), p2]
 
 def _wall_approach(ball_mm):
-    """Returns perpendicular approach point for wall balls, or None."""
     x, y   = ball_mm
     apd    = WALL_APPROACH_MM
     margin = WALL_MARGIN_MM
-    near_L = x                   < margin
-    near_R = BOARD_WIDTH_MM  - x < margin
-    near_B = y                   < margin
-    near_T = BOARD_HEIGHT_MM - y < margin
+    near_L = x < margin; near_R = BOARD_WIDTH_MM - x < margin
+    near_B = y < margin; near_T = BOARD_HEIGHT_MM - y < margin
 
     if near_L and near_B: return (x + apd, y + apd)
     if near_R and near_B: return (x - apd, y + apd)
     if near_L and near_T: return (x + apd, y - apd)
     if near_R and near_T: return (x - apd, y - apd)
-    if near_L:            return (x + apd, y)
-    if near_R:            return (x - apd, y)
-    if near_B:            return (x, y + apd)
-    if near_T:            return (x, y - apd)
+    if near_L: return (x + apd, y)
+    if near_R: return (x - apd, y)
+    if near_B: return (x, y + apd)
+    if near_T: return (x, y - apd)
     return None
-
 
 def _goal_approach(goal_mm):
-    """Returns a point GOAL_APPROACH_MM inside the field from the goal wall."""
     x, y = goal_mm
     d = GOAL_APPROACH_MM
-    if x < 10:                       return (d, y)
-    if x > BOARD_WIDTH_MM  - 10:     return (BOARD_WIDTH_MM  - d, y)
-    if y < 10:                       return (x, d)
-    if y > BOARD_HEIGHT_MM - 10:     return (x, BOARD_HEIGHT_MM - d)
+    if x < 10: return (d, y)
+    if x > BOARD_WIDTH_MM - 10: return (BOARD_WIDTH_MM - d, y)
+    if y < 10: return (x, d)
+    if y > BOARD_HEIGHT_MM - 10: return (x, BOARD_HEIGHT_MM - d)
     return None
 
-
 def _add_waypoints(route, current, target, cross_mm, wp_type):
-    """Add cross-avoiding path from current to target. Returns new current."""
     path = _detour(current, target, cross_mm)
-    for wp in path[:-1]:
-        route.append((wp[0], wp[1], NAV))
+    for wp in path[:-1]: route.append((wp[0], wp[1], NAV))
     route.append((target[0], target[1], wp_type))
     return target
 
-
 def plan_route(white_mm, orange_mm, robot_mm, cross_mm, goals_mm):
-    """
-    Waypoint order:
-      1. White balls (nearest-neighbor, wall approach, cross avoidance)
-      2. Orange ball(s) last
-      3. When no balls remain: nearest goal delivery
-
-    Cross and goal positions come from camera detection, never hardcoded.
-    """
     route   = []
     current = robot_mm
+    
+    # Filter: Keep only free balls
+    free_white = [b for b in white_mm if _wall_approach(b) is None]
+    free_orange = [b for b in orange_mm if _wall_approach(b) is None]
 
     def add_ball(ball):
         nonlocal current
-        approach = _wall_approach(ball)
-        if approach:
-            current = _add_waypoints(route, current, approach, cross_mm, NAV)
         current = _add_waypoints(route, current, ball, cross_mm, BALL)
 
-    # White balls: nearest-neighbor
-    remaining = list(white_mm)
+    remaining = list(free_white)
     while remaining:
         nxt = min(remaining, key=lambda p: _dist(current, p))
         remaining.remove(nxt)
         add_ball(nxt)
 
-    # Orange ball(s) always last
-    for nxt in orange_mm:
-        add_ball(nxt)
+    for nxt in free_orange: add_ball(nxt)
 
-    # Goal delivery when no balls remain
-    if not white_mm and not orange_mm and goals_mm:
+    if not free_white and not free_orange and goals_mm:
         goal     = min(goals_mm, key=lambda g: _dist(current, g))
         approach = _goal_approach(goal)
-        if approach:
-            current = _add_waypoints(route, current, approach, cross_mm, NAV)
+        if approach: current = _add_waypoints(route, current, approach, cross_mm, NAV)
         _add_waypoints(route, current, goal, cross_mm, GOAL)
 
     return route
@@ -599,35 +584,35 @@ def plan_route(white_mm, orange_mm, robot_mm, cross_mm, goals_mm):
 # ════════════════════════════════════════════════════════════════════════════
 
 def draw_route(world_img, route, start_mm, scale=DISPLAY_SCALE):
-    if not route:
-        return
+    if not route: return
     color_map = {NAV: (80, 180, 80), BALL: (0, 255, 255), GOAL: (0, 140, 255)}
-    pts = [world_to_view(start_mm, scale)] + \
-          [world_to_view((p[0], p[1]), scale) for p in route]
+    pts = [world_to_view(start_mm, scale)] + [world_to_view((p[0], p[1]), scale) for p in route]
     for i in range(len(pts) - 1):
         col = color_map.get(route[i][2], (0, 255, 0))
         cv2.line(world_img, pts[i], pts[i+1], col, 2)
-        ang = math.atan2(pts[i+1][1]-pts[i][1], pts[i+1][0]-pts[i][0])
-        mx  = (pts[i][0] + pts[i+1][0]) // 2
-        my  = (pts[i][1] + pts[i+1][1]) // 2
-        for sign in (-0.4, 0.4):
-            ex = int(mx - 7*math.cos(ang - sign))
-            ey = int(my - 7*math.sin(ang - sign))
-            cv2.line(world_img, (mx, my), (ex, ey), col, 2)
 
+def draw_robot_solution(world_img, solved_markers, top_center, heading_deg, display_scale, case_name, measured_labels=None):
+    if measured_labels is None: measured_labels = set(solved_markers.keys())
+    color_measured  = {"FL": (0, 255, 255), "FR": (255, 255, 0), "BL": (255, 0, 255), "BR": (0, 165, 255)}
+    color_estimated = {"FL": (0, 180, 180), "FR": (180, 180, 0), "BL": (180, 0, 180), "BR": (0, 110, 180)}
 
-def draw_robot(world_img, dir_info, pos_mm, scale=DISPLAY_SCALE):
-    if not dir_info.get("found"):
-        return
-    if not all(math.isfinite(v) for v in pos_mm):
-        return
-    pv     = world_to_view(pos_mm, scale)
-    h      = dir_info["heading"]
-    cv2.circle(world_img, pv, 10, (255, 180, 0), -1)
-    ex = int(pv[0] + 150*math.cos(math.radians(h)))
-    ey = int(pv[1] - 150*math.sin(math.radians(h)))
-    cv2.arrowedLine(world_img, pv, (ex, ey), (255, 180, 0), 2, tipLength=0.2)
+    for label in ["FL", "FR", "BL", "BR"]:
+        if label not in solved_markers: continue
+        p_view = world_to_view(solved_markers[label], display_scale)
+        measured = label in measured_labels
+        col = color_measured[label] if measured else color_estimated[label]
+        cv2.circle(world_img, p_view, 7 if measured else 5, col, -1 if measured else 2)
+        cv2.putText(world_img, f"{label}{'' if measured else '*'}", (p_view[0]+8, p_view[1]-8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 2)
 
+    fl, fr = solved_markers.get("FL"), solved_markers.get("FR")
+    if fl and fr:
+        cv2.line(world_img, world_to_view(fl, display_scale), world_to_view(fr, display_scale), (0, 255, 0), 2)
+        forward_n = compute_front_normal(fl, fr, heading_deg)
+        ex = top_center[0] + 120.0 * forward_n[0]
+        ey = top_center[1] + 120.0 * forward_n[1]
+        cv2.arrowedLine(world_img, world_to_view(top_center, display_scale), world_to_view((ex, ey), display_scale), (0, 0, 255), 3)
+
+    cv2.circle(world_img, world_to_view(top_center, display_scale), 8, (255, 0, 0), -1)
 
 def draw_balls(world_img, whites_px, oranges_px, H_px_to_world, scale=DISPLAY_SCALE):
     for (x, y, r) in whites_px:
@@ -637,13 +622,11 @@ def draw_balls(world_img, whites_px, oranges_px, H_px_to_world, scale=DISPLAY_SC
         pv = world_to_view(pixel_to_world((x, y), H_px_to_world), scale)
         cv2.circle(world_img, pv, 6, (0, 128, 255), -1)
 
-
 def draw_goals(world_img, goals_mm, scale=DISPLAY_SCALE):
     for (x, y) in goals_mm:
         pv = world_to_view((x, y), scale)
         cv2.circle(world_img, pv, 10, (0, 200, 100), 3)
-        cv2.putText(world_img, "GOAL", (pv[0]+5, pv[1]-5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 200, 100), 1)
+        cv2.putText(world_img, "GOAL", (pv[0]+5, pv[1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 200, 100), 1)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -671,6 +654,10 @@ start_mm        = (BOARD_WIDTH_MM * 0.1, BOARD_HEIGHT_MM * 0.5)
 last_route_time = 0.0
 last_pos_source = "none"
 
+# --- NEW RIGID BODY STATE ---
+LAST_TOP_CENTER = None
+LAST_SOLVED_MARKERS = None
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # ROBOT EXECUTOR THREAD
@@ -681,27 +668,16 @@ robot_stop_req = threading.Event()
 current_route  = []
 route_lock     = threading.Lock()
 
-
 def _replan_from_camera():
-    """
-    Recomputes the route from current camera detections and robot position.
-    Waits up to 3s for homography if temporarily unavailable.
-    Updates current_route and last_route (display). Stops the robot if no
-    balls and no goal remain.
-    """
     global last_route
-
     wait_end = time.time() + 3.0
-    while last_H_px_world is None and time.time() < wait_end:
-        time.sleep(0.1)
+    while last_H_px_world is None and time.time() < wait_end: time.sleep(0.1)
 
     if last_H_px_world is None:
         print("[robot] No homography - cannot replan, stopping")
-        robot_running.clear()
-        return
+        robot_running.clear(); return
 
-    cross_mm = (last_cross["center_mm"] if last_cross
-                else (BOARD_WIDTH_MM / 2.0, BOARD_HEIGHT_MM / 2.0))
+    cross_mm = (last_cross["center_mm"] if last_cross else (BOARD_WIDTH_MM / 2.0, BOARD_HEIGHT_MM / 2.0))
     w_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in last_whites_px]
     o_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in last_oranges_px]
     new_route = plan_route(w_mm, o_mm, start_mm, cross_mm, last_goals)
@@ -710,142 +686,58 @@ def _replan_from_camera():
         current_route.clear()
         current_route.extend(new_route)
 
-    if new_route:
-        print("[robot] Replanned: {} waypoints ({}W {}O)".format(
-            len(new_route), len(w_mm), len(o_mm)))
+    if new_route: print(f"[robot] Replanned: {len(new_route)} waypoints")
     else:
         print("[robot] All balls collected - heading to goal")
-        robot.stop()
-        robot_running.clear()
-
+        robot.stop(); robot_running.clear()
 
 def robot_executor():
     while True:
         robot_running.wait()
-
         with route_lock:
             if not current_route:
-                robot_running.clear()
-                print("[robot] Route complete")
-                continue
+                robot_running.clear(); continue
             wp = current_route.pop(0)
 
-        if robot_stop_req.is_set():
-            robot_running.clear()
-            robot_stop_req.clear()
-            continue
+        if robot_stop_req.is_set(): robot_running.clear(); robot_stop_req.clear(); continue
 
-        pos     = start_mm
-        wp_pos  = (wp[0], wp[1])
-        wp_type = wp[2]
+        pos, wp_pos, wp_type = start_mm, (wp[0], wp[1]), wp[2]
 
-        # Live cross avoidance: re-check from the robot's actual current position.
-        # Only for BALL/GOAL waypoints so the bypass NAV we insert never loops.
         if wp_type != NAV and last_cross is not None:
             detour_pts = _detour(pos, wp_pos, last_cross["center_mm"])
             if len(detour_pts) > 1:
                 bypass_pt = detour_pts[0]
-                print("[robot] Cross in path -> bypass ({:.0f},{:.0f})".format(
-                    bypass_pt[0], bypass_pt[1]))
-                with route_lock:
-                    current_route.insert(0, wp)  # re-queue original
-                wp      = (bypass_pt[0], bypass_pt[1], NAV)
-                wp_pos  = bypass_pt
-                wp_type = NAV
+                with route_lock: current_route.insert(0, wp)
+                wp, wp_pos, wp_type = (bypass_pt[0], bypass_pt[1], NAV), bypass_pt, NAV
 
-        print("[robot] -> {} ({})".format(wp_pos, wp_type))
+        dx, dy = wp_pos[0] - pos[0], wp_pos[1] - pos[1]
+        if math.hypot(dx, dy) >= POSITION_TOL_MM:
+            target_h, drive_sign = math.degrees(math.atan2(dy, dx)), 1
+            if wp_type == NAV and last_dir_info.get("heading") is not None:
+                if abs((target_h - last_dir_info["heading"] + 180) % 360 - 180) > REVERSE_THRESHOLD:
+                    target_h, drive_sign = (target_h + 180) % 360, -1
+            speed = 300
+            if abs((target_h - last_dir_info.get("heading", 0) + 180) % 360 - 180) > 30:
+                speed = 600
+            if not robot.turn_to_heading(target_h, lambda: last_dir_info.get("heading"), pulse_ms=speed, timeout=TURN_TIMEOUT_S, stop_fn=lambda: robot_stop_req.is_set()):
+                if robot_stop_req.is_set(): robot_running.clear(); robot_stop_req.clear(); continue
+                with route_lock: current_route.insert(0, wp)
+                time.sleep(0.5); continue
 
-        dx   = wp_pos[0] - pos[0]
-        dy   = wp_pos[1] - pos[1]
-        dist = math.hypot(dx, dy)
+            tol = APPROACH_OFFSET_MM if wp_type == BALL else POSITION_TOL_MM
+            robot.drive_to_position(wp_pos, lambda: start_mm, reverse=(drive_sign < 0), tol_mm=tol, timeout=4.0, stop_fn=lambda: robot_stop_req.is_set(), get_heading_fn=lambda: last_dir_info.get("heading"))
 
-        if dist >= POSITION_TOL_MM:
-            # 1. Camera-guided turn
-            # For NAV waypoints: if the ball is behind us, reverse is faster.
-            # Flip the target heading 180° and drive negative mm instead.
-            target_h   = math.degrees(math.atan2(dy, dx))
-            drive_sign = 1   # +1 forward, -1 reverse
-            if wp_type == NAV:
-                cur_h = last_dir_info.get("heading")
-                if cur_h is not None:
-                    diff = (target_h - cur_h + 180) % 360 - 180
-                    if abs(diff) > REVERSE_THRESHOLD:
-                        target_h   = (target_h + 180) % 360
-                        drive_sign = -1
+        if robot_stop_req.is_set(): robot_running.clear(); robot_stop_req.clear(); continue
 
-            ok = robot.turn_to_heading(
-                target_h,
-                lambda: last_dir_info.get("heading"),
-                pulse_ms=300,
-                timeout=TURN_TIMEOUT_S,
-                stop_fn=lambda: robot_stop_req.is_set(),
-            )
-            if robot_stop_req.is_set():
-                robot_running.clear()
-                robot_stop_req.clear()
-                continue
-            if not ok:
-                with route_lock:
-                    current_route.insert(0, wp)
-                time.sleep(0.5)
-                continue
-
-            # 2. Camera-guided drive: start motors, stop when ArUco reaches wp
-            # For BALL: stop slightly before the ball so collector can sweep it
-            tol       = APPROACH_OFFSET_MM if wp_type == BALL else POSITION_TOL_MM
-            print("[robot] Driving {} to ({:.0f},{:.0f}) tol={}mm".format(
-                "rev" if drive_sign < 0 else "fwd",
-                wp_pos[0], wp_pos[1], tol))
-            reached = robot.drive_to_position(
-                wp_pos,
-                lambda: start_mm,
-                reverse=(drive_sign < 0),
-                tol_mm=tol,
-                timeout=15.0,
-                stop_fn=lambda: robot_stop_req.is_set(),
-                get_heading_fn=lambda: last_dir_info.get("heading"),
-            )
-            if not reached:
-                print("[robot] Did not reach ({:.0f},{:.0f}) - continuing".format(
-                    wp_pos[0], wp_pos[1]))
-
-        if robot_stop_req.is_set():
-            robot_running.clear()
-            robot_stop_req.clear()
-            continue
-
-        # 3. Arrival action
         if wp_type == NAV:
-            robot.motor_stop()
-            time.sleep(0.2)
-            # Check route: is the next BALL waypoint still backed by a real ball?
-            with route_lock:
-                next_wp = current_route[0] if current_route else None
-            if next_wp is not None and next_wp[2] == BALL and last_H_px_world is not None:
-                target = (next_wp[0], next_wp[1])
-                all_balls = (
-                    [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in last_whites_px] +
-                    [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in last_oranges_px]
-                )
-                if not any(_dist(target, b) < 80 for b in all_balls):
-                    print("[robot] Ball at next waypoint gone - replanning")
-                    _replan_from_camera()
-                    continue
-            with route_lock:
-                remaining = len(current_route)
-            print("[robot] NAV reached - {} waypoints left".format(remaining))
-
-        elif wp_type == BALL:
-            # Wait for the collected ball to leave the camera frame
-            time.sleep(1.5)
-            _replan_from_camera()
-
-        elif wp_type == GOAL:
-            print("[robot] Ejecting balls into goal...")
-            robot.eject()
-            print("[robot] Done!")
-            robot_running.clear()
-
+            robot.motor_stop(); time.sleep(0.2)
+            with route_lock: next_wp = current_route[0] if current_route else None
+            if next_wp and next_wp[2] == BALL and last_H_px_world is not None:
+                all_balls = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in last_whites_px + last_oranges_px]
+                if not any(_dist((next_wp[0], next_wp[1]), b) < 80 for b in all_balls):
+                    _replan_from_camera(); continue
+        elif wp_type == BALL: time.sleep(1.5); _replan_from_camera()
+        elif wp_type == GOAL: robot.eject(); robot_running.clear()
 
 threading.Thread(target=robot_executor, daemon=True).start()
 
@@ -854,182 +746,135 @@ threading.Thread(target=robot_executor, daemon=True).start()
 # MAIN LOOP
 # ════════════════════════════════════════════════════════════════════════════
 
-for win in ["camera", "world", "edges"]:
-    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
-
+for win in ["camera", "world", "edges"]: cv2.namedWindow(win, cv2.WINDOW_NORMAL)
 print("Keys:  r=route  g=go  s=stop  c=collect  e=eject  p=status  ESC=quit")
 
 while True:
     ret, frame = cap.read()
-    if not ret:
-        break
-
+    if not ret: break
     display = frame.copy()
 
     # ── 1. Board detection ──────────────────────────────────────────────────
-    hsv  = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    mask = red_mask(hsv)
-    bp   = extract_boundary_points(mask)
-    mdl  = fit_frame_lines(bp)
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    bp, mdl = extract_boundary_points(red_mask(hsv)), fit_frame_lines(extract_boundary_points(red_mask(hsv)))
 
-    draw_model_line(display, mdl["top"],    (255,   0,   0), 2)
-    draw_model_line(display, mdl["bottom"], (  0,   0, 255), 2)
-    draw_model_line(display, mdl["left"],   (  0, 255,   0), 2)
-    draw_model_line(display, mdl["right"],  (  0, 255, 255), 2)
+    for k, col in zip(["top", "bottom", "left", "right"], [(255,0,0), (0,0,255), (0,255,0), (0,255,255)]):
+        draw_model_line(display, mdl[k], col, 2)
 
-    disp_h = int(BOARD_HEIGHT_MM * DISPLAY_SCALE)
-    disp_w = int(BOARD_WIDTH_MM  * DISPLAY_SCALE)
+    disp_h, disp_w = int(BOARD_HEIGHT_MM * DISPLAY_SCALE), int(BOARD_WIDTH_MM * DISPLAY_SCALE)
     world_img = np.zeros((disp_h, disp_w, 3), dtype=np.uint8)
 
     if all(mdl[k] is not None for k in ["top", "bottom", "left", "right"]):
         new_corners = {
-            "TL": intersect_horizontal_vertical(mdl["top"],    mdl["left"]),
-            "TR": intersect_horizontal_vertical(mdl["top"],    mdl["right"]),
+            "TL": intersect_horizontal_vertical(mdl["top"], mdl["left"]),
+            "TR": intersect_horizontal_vertical(mdl["top"], mdl["right"]),
             "BL": intersect_horizontal_vertical(mdl["bottom"], mdl["left"]),
             "BR": intersect_horizontal_vertical(mdl["bottom"], mdl["right"]),
         }
         if all(v is not None for v in new_corners.values()):
-            if prev_corners is None:
-                corners = new_corners
-            else:
-                corners = {n: (
-                    int(SMOOTH_ALPHA * prev_corners[n][0] +
-                        (1 - SMOOTH_ALPHA) * new_corners[n][0]),
-                    int(SMOOTH_ALPHA * prev_corners[n][1] +
-                        (1 - SMOOTH_ALPHA) * new_corners[n][1]),
-                ) for n in new_corners}
+            if prev_corners is None: corners = new_corners
+            else: corners = {n: (int(SMOOTH_ALPHA * prev_corners[n][0] + (1 - SMOOTH_ALPHA) * new_corners[n][0]), int(SMOOTH_ALPHA * prev_corners[n][1] + (1 - SMOOTH_ALPHA) * new_corners[n][1])) for n in new_corners}
             prev_corners = corners
 
-            H_px_to_world, H_px_to_view, dw, dh = compute_homographies(
-                corners, DISPLAY_SCALE)
-            last_H_px_world = H_px_to_world
-
-            f_est = estimate_focal_length(
-                corners, (frame.shape[1] / 2.0, frame.shape[0] / 2.0))
-            if f_est is not None:
-                _focal_length_est = (f_est if _focal_length_est is None else
-                    SMOOTH_ALPHA * _focal_length_est + (1 - SMOOTH_ALPHA) * f_est)
+            last_H_px_world, H_px_to_view, dw, dh = compute_homographies(corners, DISPLAY_SCALE)
+            f_est = estimate_focal_length(corners, (frame.shape[1] / 2.0, frame.shape[0] / 2.0))
+            if f_est is not None: _focal_length_est = f_est if _focal_length_est is None else SMOOTH_ALPHA * _focal_length_est + (1 - SMOOTH_ALPHA) * f_est
 
             pose = board_pose(corners, *_camera_matrix(frame.shape))
-            if pose is not None:
-                last_board_pose = pose
+            if pose is not None: last_board_pose = pose
 
             world_raw = cv2.warpPerspective(frame, H_px_to_view, (dw, dh))
             world_img = world_raw.copy()
             draw_world_grid(world_img, DISPLAY_SCALE, step_mm=200)
 
-            # ── 2. Cross ────────────────────────────────────────────────────
             cross = detect_cross(world_raw, DISPLAY_SCALE)
-            if cross:
-                last_cross = cross
-            if last_cross:
-                cv2.drawContours(world_img, [last_cross["contour"]], -1,
-                                 (255, 255, 255), 2)
-                cv2.circle(world_img, last_cross["center_view"], 6, (0, 0, 255), -1)
+            if cross: last_cross = cross
+            if last_cross: cv2.circle(world_img, last_cross["center_view"], 6, (0, 0, 255), -1)
 
-            # ── 3. Goals ────────────────────────────────────────────────────
             goals = detect_goals(world_raw, DISPLAY_SCALE)
-            if goals:
-                last_goals = goals
+            if goals: last_goals = goals
             draw_goals(world_img, last_goals)
 
-    # ── 4. Green blobs (detect first so we can exclude them from ball detection)
+    # ── 4. Green blobs ───────────────────────────────────────────────────────
     green_blobs_px = detect_green_blobs(frame)
-    for p in green_blobs_px:
-        cv2.circle(display, p, 8, (0, 255, 0), 2)
+    for p in green_blobs_px: cv2.circle(display, p, 8, (0, 255, 0), 2)
 
     # ── 5. Balls ─────────────────────────────────────────────────────────────
     whites_px, oranges_px, edges = detect_balls(frame, cfg)
-
-    # Drop any white-ball hit whose centre falls on a green robot marker
     if green_blobs_px:
-        whites_px = [(cx, cy, r) for cx, cy, r in whites_px
-                     if not any(math.hypot(cx - gx, cy - gy) < r + 20
-                                for gx, gy in green_blobs_px)]
+        whites_px = [(cx, cy, r) for cx, cy, r in whites_px if not any(math.hypot(cx - gx, cy - gy) < r + 20 for gx, gy in green_blobs_px)]
+    last_whites_px, last_oranges_px = whites_px, oranges_px
 
-    last_whites_px  = whites_px
-    last_oranges_px = oranges_px
+    for (x, y, r) in whites_px: cv2.circle(display, (x, y), r, (0, 255, 255), 2)
+    for (x, y, r) in oranges_px: cv2.circle(display, (x, y), r, (0, 128, 255), 2)
+    if last_H_px_world is not None: draw_balls(world_img, whites_px, oranges_px, last_H_px_world)
 
-    for (x, y, r) in whites_px:
-        cv2.circle(display, (x, y), r, (0, 255, 255), 2)
-    for (x, y, r) in oranges_px:
-        cv2.circle(display, (x, y), r, (0, 128, 255), 2)
-
-    if last_H_px_world is not None:
-        draw_balls(world_img, whites_px, oranges_px, last_H_px_world)
-
-    # ── 6. Heading + position (ArUco heading, green-blob or ArUco position) ───
+    # ── 6. Heading + POSITION TRACKING ─────────────────────────────────────────
     dir_info = detect_heading(frame)
     if dir_info["found"]:
-        # Smooth heading with angle-aware EMA to eliminate single-frame spikes
         if last_dir_info.get("found"):
             prev_h = last_dir_info["heading"]
             diff   = (dir_info["heading"] - prev_h + 180) % 360 - 180
-            dir_info = {**dir_info,
-                        "heading": prev_h + (1 - HEADING_SMOOTH_ALPHA) * diff}
+            dir_info["heading"] = prev_h + (1 - HEADING_SMOOTH_ALPHA) * diff
         last_dir_info = dir_info
 
-        # Compute new position (green blobs preferred, ArUco fallback)
-        new_pos = None
+        aruco_center_world = None
         if last_H_px_world is not None:
-            green_pos = robot_pos_from_green_blobs(
-                green_blobs_px, dir_info["heading"],
-                dir_info["center_px"], last_H_px_world)
-            if green_pos is not None:
-                new_pos = green_pos
-                last_pos_source = "green({})".format(len(green_blobs_px))
+            acw = pixel_to_world(dir_info["center_px"], last_H_px_world)
+            if math.isfinite(acw[0]) and math.isfinite(acw[1]):
+                aruco_center_world = acw
+        new_pos = None
+
+        if last_H_px_world is not None and aruco_center_world is not None:
+            blobs_world = [pixel_to_world(p, last_H_px_world) for p in green_blobs_px]
+            labels_found, case_name = classify_visible_blobs(blobs_world, dir_info["heading"], aruco_center_world)
+            measured_labels = set(k for k in labels_found.keys() if k in MODEL)
+
+            solved_markers, top_center = solve_robot_from_labels(labels_found, case_name, dir_info["heading"], LAST_TOP_CENTER, LAST_SOLVED_MARKERS)
+
+            # History Fallback Trigger
+            if (solved_markers is None or top_center is None) and LAST_SOLVED_MARKERS is not None and len(blobs_world) > 0:
+                hist_labels = assign_using_last_pose(blobs_world, LAST_SOLVED_MARKERS)
+                if hist_labels:
+                    solved_markers, top_center = solve_from_any_labeled_points(hist_labels, dir_info["heading"])
+                    measured_labels = set(hist_labels.keys())
+                    case_name = "history"
+
+            if solved_markers is not None and top_center is not None:
+                # Safely check that the math didn't produce NaN before accepting it
+                if math.isfinite(top_center[0]) and math.isfinite(top_center[1]):
+                    LAST_TOP_CENTER = top_center
+                    LAST_SOLVED_MARKERS = dict(solved_markers)
+                    new_pos = top_center  # Setting position to the FRONT of the robot!
+                    last_pos_source = f"green({case_name})"
+                    draw_robot_solution(world_img, solved_markers, top_center, dir_info["heading"], DISPLAY_SCALE, case_name, measured_labels)
             elif last_board_pose is not None:
                 new_pos = marker_ground_position(dir_info["tvec"], last_board_pose)
                 last_pos_source = "aruco"
             else:
-                new_pos = pixel_to_world(dir_info["center_px"], last_H_px_world)
+                new_pos = aruco_center_world
                 last_pos_source = "raw"
         elif last_board_pose is not None:
             new_pos = marker_ground_position(dir_info["tvec"], last_board_pose)
             last_pos_source = "aruco"
 
-        # Apply position EMA smoothing
+        # Position EMA smoothing applied to the new Top Center
         if new_pos is not None and math.isfinite(new_pos[0]) and math.isfinite(new_pos[1]):
             if math.isfinite(start_mm[0]) and math.isfinite(start_mm[1]):
                 start_mm = (
                     POSE_SMOOTH_ALPHA * start_mm[0] + (1 - POSE_SMOOTH_ALPHA) * new_pos[0],
                     POSE_SMOOTH_ALPHA * start_mm[1] + (1 - POSE_SMOOTH_ALPHA) * new_pos[1],
                 )
-            else:
-                start_mm = new_pos
+            else: start_mm = new_pos
 
-    if last_H_px_world is not None:
-        ref_px = last_dir_info.get("center_px")
-        for p in green_blobs_px:
-            if ref_px is None or math.hypot(p[0]-ref_px[0], p[1]-ref_px[1]) < GREEN_MAX_DIST_PX:
-                wv = world_to_view(pixel_to_world(p, last_H_px_world), DISPLAY_SCALE)
-                cv2.circle(world_img, wv, 5, (0, 255, 0), -1)
-        draw_robot(world_img, last_dir_info, start_mm)
+    cv2.putText(display, f"Pos:({start_mm[0]:.0f},{start_mm[1]:.0f})mm  src:{last_pos_source}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 0), 1)
 
-    h_str = "{:+.1f}".format(last_dir_info["heading"]) \
-            if last_dir_info.get("found") else "?"
-    cv2.putText(display,
-        "Heading:{}  Balls:{}W {}O  Goals:{}  Cross:{}  Run:{}".format(
-            h_str, len(whites_px), len(oranges_px),
-            len(last_goals),
-            "OK" if last_cross else "?",
-            "YES" if robot_running.is_set() else "no",
-        ), (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
-    cv2.putText(display,
-        "Pos:({:.0f},{:.0f})mm  src:{}".format(
-            start_mm[0], start_mm[1], last_pos_source,
-        ), (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 0), 1)
-
-    # ── 7. Route display (auto-refresh every 3 s while idle) ────────────────
+    # ── 7. Route display ───────────────────────────────────────────────────────
     now = time.time()
-    if (now - last_route_time >= ROUTE_INTERVAL_S
-            and last_H_px_world is not None
-            and last_cross is not None
-            and not robot_running.is_set()):
-        cross_mm = last_cross["center_mm"]
+    if now - last_route_time >= ROUTE_INTERVAL_S and last_H_px_world is not None and last_cross is not None and not robot_running.is_set():
         w_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in whites_px]
         o_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in oranges_px]
-        last_route = plan_route(w_mm, o_mm, start_mm, cross_mm, last_goals)
+        last_route = plan_route(w_mm, o_mm, start_mm, last_cross["center_mm"], last_goals)
         last_route_time = now
 
     draw_route(world_img, last_route, start_mm)
@@ -1039,57 +884,23 @@ while True:
     cv2.imshow("edges",  edges)
 
     key = cv2.waitKey(1) & 0xFF
-
     if key == ord("r"):
-        if robot_running.is_set():
-            print("Robot running - press s first")
-        elif last_H_px_world is None or last_cross is None:
-            print("Waiting for board + cross detection")
+        if robot_running.is_set(): print("Robot running - press s first")
+        elif last_H_px_world is None or last_cross is None: print("Waiting for board + cross detection")
         else:
-            cross_mm = last_cross["center_mm"]
             w_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in whites_px]
             o_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in oranges_px]
-            last_route = plan_route(w_mm, o_mm, start_mm, cross_mm, last_goals)
-            with route_lock:
-                current_route.clear()
-                current_route.extend(last_route)
-            print("Route: {} waypoints - press g to start".format(len(last_route)))
-
+            last_route = plan_route(w_mm, o_mm, start_mm, last_cross["center_mm"], last_goals)
+            with route_lock: current_route.clear(); current_route.extend(last_route)
+            print(f"Route: {len(last_route)} waypoints - press g to start")
     elif key == ord("g"):
-        if not robot.connected:
-            print("Robot not connected")
-        elif not current_route:
-            print("No route - press r first")
-        else:
-            robot_stop_req.clear()
-            robot_running.set()
-            print("GO")
-
-    elif key == ord("s"):
-        robot_stop_req.set()
-        robot_running.clear()
-        robot.stop()
-        print("STOP")
-
-    elif key == ord("c"):
-        robot.collect()
-        print("Collect")
-
-    elif key == ord("e"):
-        robot.eject()
-        print("Eject")
-
-    elif key == ord("p"):
-        print("Heading:{}  Balls:{}W {}O  Goals:{}  Cross:{}  Route:{} wp  Run:{}".format(
-            h_str, len(whites_px), len(oranges_px),
-            len(last_goals),
-            "OK" if last_cross else "?",
-            len(current_route),
-            robot_running.is_set(),
-        ))
-
-    elif key == 27:
-        break
+        if not robot.connected: print("Robot not connected")
+        elif not current_route: print("No route - press r first")
+        else: robot_stop_req.clear(); robot_running.set(); print("GO")
+    elif key == ord("s"): robot_stop_req.set(); robot_running.clear(); robot.stop(); print("STOP")
+    elif key == ord("c"): robot.collect(); print("Collect")
+    elif key == ord("e"): robot.eject(); print("Eject")
+    elif key == 27: break
 
 cap.release()
 cv2.destroyAllWindows()
