@@ -33,7 +33,7 @@ SMOOTH_ALPHA       = 0.80
 
 ARUCO_DICT         = aruco.DICT_4X4_50
 ROBOT_MARKER_ID    = 0
-HEADING_OFFSET_DEG = -90
+HEADING_OFFSET_DEG = 0
 MARKER_SIZE_MM     = 80
 
 WALL_MARGIN_MM     = 200    # ball within this distance of a wall = wall ball
@@ -47,7 +47,19 @@ GOAL_APPROACH_MM   = 220    # approach point distance inside field from goal
 TURN_TIMEOUT_S     = 12.0
 ROUTE_INTERVAL_S   = 3.0    # auto-refresh display route while idle
 BALL_DRIVE_SPEED   = 10     # slow speed sent to EV3 when sweeping through a ball
-REVERSE_THRESHOLD  = 100    # degrees: if angle to NAV > this, reverse is faster
+REVERSE_THRESHOLD    = 181    # disabled: always turn and drive forward (was 100)
+
+HEADING_SMOOTH_ALPHA = 0.50   # heading EMA per frame (higher = more smoothing / more lag)
+POSE_SMOOTH_ALPHA    = 0.60   # position EMA per frame
+
+# Green corner markers on robot (parallax-free robot position)
+GREEN_H_MIN      = 25
+GREEN_H_MAX      = 95
+GREEN_S_MIN      = 40
+GREEN_V_MIN      = 40
+GREEN_MIN_AREA   = 10
+ROBOT_LENGTH_MM  = 370   # mm between front and back green marker rows
+GREEN_MAX_DIST_PX = 350  # reject green blobs further than this from ArUco (pixels)
 
 # Waypoint type constants
 NAV  = "nav"   # navigation point, no action on arrival
@@ -379,6 +391,86 @@ def detect_heading(frame):
     return {"found": False}
 
 
+def detect_green_blobs(frame):
+    """Returns list of (x, y) pixel centroids for every green marker found."""
+    hsv  = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv,
+                       (GREEN_H_MIN, GREEN_S_MIN, GREEN_V_MIN),
+                       (GREEN_H_MAX, 255, 255))
+    k    = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  k)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    blobs = []
+    for c in cnts:
+        if cv2.contourArea(c) < GREEN_MIN_AREA:
+            continue
+        M = cv2.moments(c)
+        if abs(M["m00"]) < 1e-6:
+            continue
+        blobs.append((int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])))
+    return blobs
+
+
+def robot_pos_from_green_blobs(blobs_px, heading, aruco_px, H_px_to_world):
+    """
+    Estimates robot center (world mm) from green corner markers.
+    Uses ArUco heading to identify front vs back blobs, then finds the pair
+    whose heading-direction separation best matches ROBOT_LENGTH_MM.
+    Returns (x_mm, y_mm) or None if fewer than 2 blobs detected.
+    """
+    # Discard blobs that are far from the ArUco marker in camera pixel space.
+    # Genuine robot markers are physically close; floor reflections / cable noise is not.
+    aruco_px_f = aruco_px
+    blobs_px = [(bx, by) for bx, by in blobs_px
+                if math.hypot(bx - aruco_px_f[0], by - aruco_px_f[1]) < GREEN_MAX_DIST_PX]
+
+    if len(blobs_px) < 2:
+        return None
+
+    ax, ay = pixel_to_world(aruco_px, H_px_to_world)
+    hx = math.cos(math.radians(heading))
+    hy = math.sin(math.radians(heading))
+    blobs_world = [pixel_to_world(p, H_px_to_world) for p in blobs_px]
+
+    if len(blobs_world) >= 4:
+        # 4 markers: average 2 most-forward (front row) + 2 most-backward (back row)
+        by_fwd = sorted(blobs_world,
+                        key=lambda b: (b[0]-ax)*hx + (b[1]-ay)*hy,
+                        reverse=True)
+        front_x = (by_fwd[0][0] + by_fwd[1][0]) / 2
+        front_y = (by_fwd[0][1] + by_fwd[1][1]) / 2
+        back_x  = (by_fwd[-2][0] + by_fwd[-1][0]) / 2
+        back_y  = (by_fwd[-2][1] + by_fwd[-1][1]) / 2
+    else:
+        # 2-3 blobs: find the pair whose heading-direction separation is
+        # closest to the known robot length (rejects stray noise blobs)
+        best_err = float('inf')
+        front_x = front_y = back_x = back_y = None
+        for i in range(len(blobs_world)):
+            for j in range(i + 1, len(blobs_world)):
+                b1, b2 = blobs_world[i], blobs_world[j]
+                fwd = (b1[0]-b2[0])*hx + (b1[1]-b2[1])*hy
+                if fwd < 0:
+                    b1, b2 = b2, b1
+                    fwd = -fwd
+                err = abs(fwd - ROBOT_LENGTH_MM)
+                if err < best_err:
+                    best_err = err
+                    front_x, front_y = b1
+                    back_x,  back_y  = b2
+        if front_x is None:
+            return None
+
+    # Average two independent center estimates; lateral errors (±85mm) cancel
+    # for diagonal marker pairs and are at most 85mm for same-side pairs
+    rx = (front_x + back_x + ROBOT_LENGTH_MM * hx) / 2
+    ry = (front_y + back_y + ROBOT_LENGTH_MM * hy) / 2
+    if not (math.isfinite(rx) and math.isfinite(ry)):
+        return None
+    return rx, ry
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # ROUTE PLANNING
 # ════════════════════════════════════════════════════════════════════════════
@@ -527,6 +619,8 @@ def draw_route(world_img, route, start_mm, scale=DISPLAY_SCALE):
 def draw_robot(world_img, dir_info, pos_mm, scale=DISPLAY_SCALE):
     if not dir_info.get("found"):
         return
+    if not all(math.isfinite(v) for v in pos_mm):
+        return
     pv     = world_to_view(pos_mm, scale)
     h      = dir_info["heading"]
     cv2.circle(world_img, pv, 10, (255, 180, 0), -1)
@@ -575,6 +669,7 @@ last_oranges_px = []
 last_route      = []
 start_mm        = (BOARD_WIDTH_MM * 0.1, BOARD_HEIGHT_MM * 0.5)
 last_route_time = 0.0
+last_pos_source = "none"
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -838,8 +933,20 @@ while True:
                 last_goals = goals
             draw_goals(world_img, last_goals)
 
-    # ── 4. Balls ────────────────────────────────────────────────────────────
+    # ── 4. Green blobs (detect first so we can exclude them from ball detection)
+    green_blobs_px = detect_green_blobs(frame)
+    for p in green_blobs_px:
+        cv2.circle(display, p, 8, (0, 255, 0), 2)
+
+    # ── 5. Balls ─────────────────────────────────────────────────────────────
     whites_px, oranges_px, edges = detect_balls(frame, cfg)
+
+    # Drop any white-ball hit whose centre falls on a green robot marker
+    if green_blobs_px:
+        whites_px = [(cx, cy, r) for cx, cy, r in whites_px
+                     if not any(math.hypot(cx - gx, cy - gy) < r + 20
+                                for gx, gy in green_blobs_px)]
+
     last_whites_px  = whites_px
     last_oranges_px = oranges_px
 
@@ -851,16 +958,52 @@ while True:
     if last_H_px_world is not None:
         draw_balls(world_img, whites_px, oranges_px, last_H_px_world)
 
-    # ── 5. Heading ──────────────────────────────────────────────────────────
+    # ── 6. Heading + position (ArUco heading, green-blob or ArUco position) ───
     dir_info = detect_heading(frame)
     if dir_info["found"]:
+        # Smooth heading with angle-aware EMA to eliminate single-frame spikes
+        if last_dir_info.get("found"):
+            prev_h = last_dir_info["heading"]
+            diff   = (dir_info["heading"] - prev_h + 180) % 360 - 180
+            dir_info = {**dir_info,
+                        "heading": prev_h + (1 - HEADING_SMOOTH_ALPHA) * diff}
         last_dir_info = dir_info
-        if last_board_pose is not None:
-            start_mm = marker_ground_position(dir_info["tvec"], last_board_pose)
-        elif last_H_px_world is not None:
-            start_mm = pixel_to_world(dir_info["center_px"], last_H_px_world)
+
+        # Compute new position (green blobs preferred, ArUco fallback)
+        new_pos = None
+        if last_H_px_world is not None:
+            green_pos = robot_pos_from_green_blobs(
+                green_blobs_px, dir_info["heading"],
+                dir_info["center_px"], last_H_px_world)
+            if green_pos is not None:
+                new_pos = green_pos
+                last_pos_source = "green({})".format(len(green_blobs_px))
+            elif last_board_pose is not None:
+                new_pos = marker_ground_position(dir_info["tvec"], last_board_pose)
+                last_pos_source = "aruco"
+            else:
+                new_pos = pixel_to_world(dir_info["center_px"], last_H_px_world)
+                last_pos_source = "raw"
+        elif last_board_pose is not None:
+            new_pos = marker_ground_position(dir_info["tvec"], last_board_pose)
+            last_pos_source = "aruco"
+
+        # Apply position EMA smoothing
+        if new_pos is not None and math.isfinite(new_pos[0]) and math.isfinite(new_pos[1]):
+            if math.isfinite(start_mm[0]) and math.isfinite(start_mm[1]):
+                start_mm = (
+                    POSE_SMOOTH_ALPHA * start_mm[0] + (1 - POSE_SMOOTH_ALPHA) * new_pos[0],
+                    POSE_SMOOTH_ALPHA * start_mm[1] + (1 - POSE_SMOOTH_ALPHA) * new_pos[1],
+                )
+            else:
+                start_mm = new_pos
 
     if last_H_px_world is not None:
+        ref_px = last_dir_info.get("center_px")
+        for p in green_blobs_px:
+            if ref_px is None or math.hypot(p[0]-ref_px[0], p[1]-ref_px[1]) < GREEN_MAX_DIST_PX:
+                wv = world_to_view(pixel_to_world(p, last_H_px_world), DISPLAY_SCALE)
+                cv2.circle(world_img, wv, 5, (0, 255, 0), -1)
         draw_robot(world_img, last_dir_info, start_mm)
 
     h_str = "{:+.1f}".format(last_dir_info["heading"]) \
@@ -872,8 +1015,12 @@ while True:
             "OK" if last_cross else "?",
             "YES" if robot_running.is_set() else "no",
         ), (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+    cv2.putText(display,
+        "Pos:({:.0f},{:.0f})mm  src:{}".format(
+            start_mm[0], start_mm[1], last_pos_source,
+        ), (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 0), 1)
 
-    # ── 6. Route display (auto-refresh every 3 s while idle) ────────────────
+    # ── 7. Route display (auto-refresh every 3 s while idle) ────────────────
     now = time.time()
     if (now - last_route_time >= ROUTE_INTERVAL_S
             and last_H_px_world is not None
