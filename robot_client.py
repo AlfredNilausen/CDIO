@@ -83,7 +83,7 @@ class RobotClient:
         return self._send(cmd)
 
     def drive_to_position(self, target_mm, get_pos_fn, reverse=False,
-                          tol_mm=50, speed=30, timeout=15.0, stop_fn=None,
+                          tol_mm=50, speed=20, timeout=5.0, stop_fn=None,
                           get_heading_fn=None):
         """
         Starts continuous drive, polls get_pos_fn() (returns (x,y) mm or None),
@@ -116,7 +116,7 @@ class RobotClient:
                 d = math.hypot(target_mm[0] - pos[0], target_mm[1] - pos[1])
                 if d <= tol_mm:
                     self._send({"type": "motor_stop"})
-                    time.sleep(0.15)
+                    time.sleep(0.05)
                     return True
 
                 if not corrected and dist0 is not None and d <= dist0 / 2.0:

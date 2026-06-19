@@ -40,12 +40,12 @@ WALL_MARGIN_MM     = 150
 WALL_APPROACH_MM   = 180
 CROSS_MARGIN_MM    = 250
 POSITION_TOL_MM    = 50
-APPROACH_OFFSET_MM = 80
+APPROACH_OFFSET_MM = 90
 GOAL_MIN_GAP_MM    = 60
 GOAL_APPROACH_MM   = 220
 
 TURN_TIMEOUT_S     = 0.7
-ROUTE_INTERVAL_S   = 3.0
+ROUTE_INTERVAL_S   = 2.0
 BALL_DRIVE_SPEED   = 10
 REVERSE_THRESHOLD  = 181
 
@@ -60,7 +60,7 @@ GREEN_V_MIN      = 45
 MIN_BLOB_AREA    = 5
 
 ROBOT_WIDTH_MM   = 190.0
-ROBOT_LENGTH_MM  = 288.0
+ROBOT_LENGTH_MM  = 258.0
 HALF_W           = ROBOT_WIDTH_MM / 2.0
 LENGTH           = ROBOT_LENGTH_MM
 SIDE_SIGN        = 1.0
@@ -77,7 +77,7 @@ MODEL = {
 NAV  = "nav"
 BALL = "ball"
 GOAL = "goal"
-
+CURRENT_ROBOT_POLYGON = None
 
 # ════════════════════════════════════════════════════════════════════════════
 # BALL DETECTION
@@ -496,6 +496,31 @@ def solve_robot_from_labels(labels_found, case_name, heading_deg, last_top_cente
 # ════════════════════════════════════════════════════════════════════════════
 
 def _dist(a, b): return math.hypot(a[0] - b[0], a[1] - b[1])
+
+def point_inside_robot(point, solved_markers):
+    """
+    Returns True if a world point lies inside the robot rectangle.
+
+    solved_markers must contain:
+        FL FR BL BR
+    """
+
+    if solved_markers is None:
+        return False
+
+    poly = np.array([
+        solved_markers["FL"],
+        solved_markers["FR"],
+        solved_markers["BR"],
+        solved_markers["BL"],
+    ], dtype=np.float32)
+
+    return cv2.pointPolygonTest(
+        poly,
+        (float(point[0]), float(point[1])),
+        False
+    ) >= 0
+    
 def _seg_dist(p1, p2, pt):
     dx, dy = p2[0] - p1[0], p2[1] - p1[1]
     if dx == dy == 0: return _dist(p1, pt)
@@ -728,17 +753,18 @@ def robot_executor():
                 time.sleep(0.5); continue
 
             tol = APPROACH_OFFSET_MM if wp_type == BALL else POSITION_TOL_MM
-            robot.drive_to_position(wp_pos, lambda: start_mm, reverse=(drive_sign < 0), tol_mm=tol, timeout=4.0, stop_fn=lambda: robot_stop_req.is_set(), get_heading_fn=lambda: last_dir_info.get("heading"))
+            speed = 20
+            if wp_type == BALL: speed = 40
+            robot.drive_to_position(wp_pos, lambda: start_mm, reverse=(drive_sign < 0), tol_mm=tol, speed = speed, timeout=6.0, stop_fn=lambda: robot_stop_req.is_set(), get_heading_fn=lambda: last_dir_info.get("heading"))
 
         if robot_stop_req.is_set(): robot_running.clear(); robot_stop_req.clear(); continue
 
         if wp_type == NAV:
-            robot.motor_stop(); time.sleep(0.2)
-            with route_lock: next_wp = current_route[0] if current_route else None
-            if next_wp and next_wp[2] == BALL and last_H_px_world is not None:
-                all_balls = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in last_whites_px + last_oranges_px]
-                if not any(_dist((next_wp[0], next_wp[1]), b) < 80 for b in all_balls):
-                    _replan_from_camera(); continue
+
+            robot.motor_stop()
+            time.sleep(0.25)
+            _replan_from_camera()
+            continue
         elif wp_type == BALL: time.sleep(1.5); _replan_from_camera()
         elif wp_type == GOAL: robot.eject(); robot_running.clear()
 
@@ -848,6 +874,7 @@ while True:
                 if math.isfinite(top_center[0]) and math.isfinite(top_center[1]):
                     LAST_TOP_CENTER = top_center
                     LAST_SOLVED_MARKERS = dict(solved_markers)
+                    CURRENT_ROBOT_POLYGON = dict(solved_markers)
                     new_pos = top_center  # Setting position to the FRONT of the robot!
                     last_pos_source = f"green({case_name})"
                     draw_robot_solution(world_img, solved_markers, top_center, dir_info["heading"], DISPLAY_SCALE, case_name, measured_labels)
