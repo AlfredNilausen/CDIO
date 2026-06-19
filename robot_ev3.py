@@ -12,7 +12,7 @@ Commands:
   turn_right            -> start turning right (collector on, non-blocking)
   drive   {mm: N}       -> drive N mm forward/backward (blocking, collector on)
   collect               -> run collector forward for COLLECT_TIME_S
-  eject                 -> run collector backward for EJECT_TIME_S
+  eject                 -> run agitated ejection loop for 10 seconds
   resume                -> clear stop flag
 
 Buttons:
@@ -40,7 +40,6 @@ BALL_SPEED     = 10   # slower when sweeping through a ball
 TURN_SPEED     = 10
 COLLECT_SPEED  = 30
 COLLECT_TIME_S = 1.5
-EJECT_TIME_S   = 20
 
 motor_right   = LargeMotor(OUTPUT_A)
 motor_left    = LargeMotor(OUTPUT_D)
@@ -193,9 +192,28 @@ def handle(cmd):
         return {"status": "collected"}
 
     if t == "eject":
-        motor_collect.on(SpeedPercent(-COLLECT_SPEED))
-        time.sleep(EJECT_TIME_S)
+        print("[EV3] Starting Agitated Ejection...")
+        
+        # 1. Start a timer for the total ejection sequence (10 seconds total)
+        end_time = time.time() + 15.0
+        
+        # 2. Loop until the timer runs out
+        while time.time() < end_time:
+            # WIGGLE 1: Full Power Eject (Pushing balls out)
+            motor_collect.on(SpeedPercent(-100)) # Max speed out
+            time.sleep(1.0)                      # Eject for 1 second
+            
+            # WIGGLE 2: Short Reverse/Collect (Unjamming the tube)
+            motor_collect.on(SpeedPercent(60))   # Pull back slightly
+            time.sleep(0.3)                      # Quick 0.3 second jerk backwards
+            
+        # 3. Final clear: give one last strong push out to clear the chamber
+        motor_collect.on(SpeedPercent(-100))
+        time.sleep(1.5)
+        
+        # 4. Stop the motor
         motor_collect.off()
+        print("[EV3] Ejection complete.")
         return {"status": "ejected"}
 
     if t == "resume":

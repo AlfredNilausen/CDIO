@@ -43,6 +43,7 @@ POSITION_TOL_MM    = 50
 APPROACH_OFFSET_MM = 80
 GOAL_MIN_GAP_MM    = 60
 GOAL_APPROACH_MM   = 350
+GOAL_TOL_MM       = 170
 
 TURN_TIMEOUT_S     = 0.7
 ROUTE_INTERVAL_S   = 3.0
@@ -75,8 +76,8 @@ MODEL = {
 
 # --- HARDCODED GOALS ---
 HARDCODED_GOALS_MM = [
-    (0.0, 600.0),                             # Left wall goal
-    (float(BOARD_WIDTH_MM), 600.0)            # Right wall goal
+    (0.0, 635.0),                             # Left wall goal
+    (float(BOARD_WIDTH_MM), 635.0)            # Right wall goal
 ]
 
 # Waypoint type constants
@@ -774,7 +775,7 @@ def robot_executor():
             
             # --- DYNAMIC TOLERANCE ---
             elif wp_type == GOAL: 
-                tol = 100
+                tol = GOAL_TOL_MM
             elif wp_type == BALL:
                 tol = APPROACH_OFFSET_MM
             else:
