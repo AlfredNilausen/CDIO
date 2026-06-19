@@ -40,12 +40,12 @@ WALL_MARGIN_MM     = 150
 WALL_APPROACH_MM   = 180
 CROSS_MARGIN_MM    = 250
 POSITION_TOL_MM    = 50
-APPROACH_OFFSET_MM = 90
+APPROACH_OFFSET_MM = 80
 GOAL_MIN_GAP_MM    = 60
-GOAL_APPROACH_MM   = 220
+GOAL_APPROACH_MM   = 350
 
 TURN_TIMEOUT_S     = 0.7
-ROUTE_INTERVAL_S   = 2.0
+ROUTE_INTERVAL_S   = 3.0
 BALL_DRIVE_SPEED   = 10
 REVERSE_THRESHOLD  = 181
 
@@ -60,7 +60,7 @@ GREEN_V_MIN      = 45
 MIN_BLOB_AREA    = 5
 
 ROBOT_WIDTH_MM   = 190.0
-ROBOT_LENGTH_MM  = 258.0
+ROBOT_LENGTH_MM  = 288.0
 HALF_W           = ROBOT_WIDTH_MM / 2.0
 LENGTH           = ROBOT_LENGTH_MM
 SIDE_SIGN        = 1.0
@@ -72,6 +72,12 @@ MODEL = {
     "BL": (-LENGTH,  -HALF_W),
     "BR": (-LENGTH,   HALF_W),
 }
+
+# --- HARDCODED GOALS ---
+HARDCODED_GOALS_MM = [
+    (0.0, 600.0),                             # Left wall goal
+    (float(BOARD_WIDTH_MM), 600.0)            # Right wall goal
+]
 
 # Waypoint type constants
 NAV  = "nav"
@@ -659,7 +665,7 @@ def draw_goals(world_img, goals_mm, scale=DISPLAY_SCALE):
 # ════════════════════════════════════════════════════════════════════════════
 
 cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
-cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 if not cap.isOpened():
@@ -671,7 +677,7 @@ prev_corners = None
 last_H_px_world = None
 last_board_pose = None
 last_cross      = None
-last_goals      = []
+last_goals      = HARDCODED_GOALS_MM
 last_dir_info   = {"found": False}
 last_whites_px  = []
 last_oranges_px = []
@@ -739,14 +745,27 @@ def robot_executor():
         dx, dy = wp_pos[0] - pos[0], wp_pos[1] - pos[1]
         if math.hypot(dx, dy) >= POSITION_TOL_MM:
             target_h, drive_sign = math.degrees(math.atan2(dy, dx)), 1
-            if wp_type == NAV and last_dir_info.get("heading") is not None:
-                if abs((target_h - last_dir_info["heading"] + 180) % 360 - 180) > REVERSE_THRESHOLD:
-                    target_h, drive_sign = (target_h + 180) % 360, -1
-            ##juster hastighed her
-            time_wheel_spinning = abs((target_h - last_dir_info.get("heading", 0) + 180) % 360 - 180)*65
-            if abs((target_h - last_dir_info.get("heading", 0) + 180) % 360 - 180) < 10:
-                time_wheel_spinning = 400
-            
+            current_h = last_dir_info.get("heading")
+
+            if current_h is not None:
+                # Check for reverse if NAV
+                if wp_type == NAV:
+                    if abs((target_h - current_h + 180) % 360 - 180) > REVERSE_THRESHOLD:
+                        target_h, drive_sign = (target_h + 180) % 360, -1
+
+                # Calculate the shortest angle difference for turn pulse
+                angle_diff = abs((target_h - current_h + 180) % 360 - 180)
+                
+                # Dynamic pulse duration: smaller error = smaller pulse
+                if angle_diff < 10:
+                    time_wheel_spinning = 400  # Tiny pulse for fine adjustments
+                else:
+                    time_wheel_spinning = angle_diff * 15 # e.g., 20 deg error = 300ms pulse
+                    # Cap the maximum pulse so it doesn't spin wildly on large turns
+                    time_wheel_spinning = min(time_wheel_spinning, 800)
+            else:
+                time_wheel_spinning = 400 # Safe fallback if heading is briefly lost
+
             if not robot.turn_to_heading(target_h, lambda: last_dir_info.get("heading"), pulse_ms=time_wheel_spinning, timeout=TURN_TIMEOUT_S, stop_fn=lambda: robot_stop_req.is_set()):
                 if robot_stop_req.is_set(): robot_running.clear(); robot_stop_req.clear(); continue
                 with route_lock: current_route.insert(0, wp)
@@ -820,8 +839,6 @@ while True:
             if cross: last_cross = cross
             if last_cross: cv2.circle(world_img, last_cross["center_view"], 6, (0, 0, 255), -1)
 
-            goals = detect_goals(world_raw, DISPLAY_SCALE)
-            if goals: last_goals = goals
             draw_goals(world_img, last_goals)
 
     # ── 4. Green blobs ───────────────────────────────────────────────────────
