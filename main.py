@@ -759,7 +759,7 @@ def robot_executor():
 
                 # Calculate the shortest angle difference for turn pulse
                 angle_diff = abs((target_h - current_h + 180) % 360 - 180)
-                angle_diff = abs((target_h - current_h + 180) % 360 - 180)
+                
                 time_wheel_spinning = 3000
                 if angle_diff < 30:
                     time_wheel_spinning = 1700
