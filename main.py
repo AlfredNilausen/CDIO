@@ -604,7 +604,11 @@ def plan_route(white_mm, orange_mm, robot_mm, cross_mm, goals_mm):
     if not free_white and not free_orange and goals_mm:
         goal     = min(goals_mm, key=lambda g: _dist(current, g))
         approach = _goal_approach(goal)
-        if approach: current = _add_waypoints(route, current, approach, cross_mm, NAV)
+        
+        # Only add the approach waypoint if the robot is far away from it
+        if approach and _dist(current, approach) > 100: 
+            current = _add_waypoints(route, current, approach, cross_mm, NAV)
+            
         _add_waypoints(route, current, goal, cross_mm, GOAL)
 
     return route
@@ -755,37 +759,52 @@ def robot_executor():
 
                 # Calculate the shortest angle difference for turn pulse
                 angle_diff = abs((target_h - current_h + 180) % 360 - 180)
-                
-                # Dynamic pulse duration: smaller error = smaller pulse
-                if angle_diff < 10:
-                    time_wheel_spinning = 400  # Tiny pulse for fine adjustments
-                else:
-                    time_wheel_spinning = angle_diff * 15 # e.g., 20 deg error = 300ms pulse
-                    # Cap the maximum pulse so it doesn't spin wildly on large turns
-                    time_wheel_spinning = min(time_wheel_spinning, 800)
-            else:
-                time_wheel_spinning = 400 # Safe fallback if heading is briefly lost
+                angle_diff = abs((target_h - current_h + 180) % 360 - 180)
+                time_wheel_spinning = 3000
+                if angle_diff < 30:
+                    time_wheel_spinning = 1700
+                elif angle_diff < 10:
+                    time_wheel_spinning = 400
 
             if not robot.turn_to_heading(target_h, lambda: last_dir_info.get("heading"), pulse_ms=time_wheel_spinning, timeout=TURN_TIMEOUT_S, stop_fn=lambda: robot_stop_req.is_set()):
                 if robot_stop_req.is_set(): robot_running.clear(); robot_stop_req.clear(); continue
                 with route_lock: current_route.insert(0, wp)
                 time.sleep(0.5); continue
 
-            tol = APPROACH_OFFSET_MM if wp_type == BALL else POSITION_TOL_MM
+            # --- DYNAMIC TOLERANCE ---
+            if wp_type == GOAL:
+                tol = 130  # High tolerance so it doesn't have to perfectly hit the physical wall
+            elif wp_type == BALL:
+                tol = APPROACH_OFFSET_MM
+            else:
+                tol = POSITION_TOL_MM
+
             speed = 20
             if wp_type == BALL: speed = 40
-            robot.drive_to_position(wp_pos, lambda: start_mm, reverse=(drive_sign < 0), tol_mm=tol, speed = speed, timeout=6.0, stop_fn=lambda: robot_stop_req.is_set(), get_heading_fn=lambda: last_dir_info.get("heading"))
+            
+            robot.drive_to_position(wp_pos, lambda: start_mm, reverse=(drive_sign < 0), tol_mm=tol, speed=speed, timeout=6.0, stop_fn=lambda: robot_stop_req.is_set(), get_heading_fn=lambda: last_dir_info.get("heading"))
 
         if robot_stop_req.is_set(): robot_running.clear(); robot_stop_req.clear(); continue
 
         if wp_type == NAV:
-
             robot.motor_stop()
             time.sleep(0.25)
-            _replan_from_camera()
+            
+            # --- FIX: Prevent infinite replan loops when heading to the goal ---
+            with route_lock:
+                next_wp = current_route[0] if current_route else None
+            # Only recalculate if the next target is a ball
+            if next_wp and next_wp[2] == BALL:
+                _replan_from_camera()
             continue
-        elif wp_type == BALL: time.sleep(1.5); _replan_from_camera()
-        elif wp_type == GOAL: robot.eject(); robot_running.clear()
+            
+        elif wp_type == BALL: 
+            time.sleep(1.5)
+            _replan_from_camera()
+            
+        elif wp_type == GOAL: 
+            robot.eject()
+            robot_running.clear()
 
 threading.Thread(target=robot_executor, daemon=True).start()
 
