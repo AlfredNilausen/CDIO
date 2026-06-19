@@ -168,7 +168,7 @@ class RobotClient:
         return self._circular_mean(vals) if len(vals) > 1 else vals[0]
 
     def turn_to_heading(self, target_heading, get_heading_fn,
-                        pulse_ms=100, tol=3.0, timeout=12.0, stop_fn=None):
+                        pulse_ms=100, tol=3.0, timeout=2.0, stop_fn=None):
         """
         Turns to target_heading with discrete pulses: send turn_left/
         turn_right for a short, fixed duration, stop completely, then

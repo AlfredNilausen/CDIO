@@ -38,13 +38,13 @@ MARKER_SIZE_MM     = 80
 
 WALL_MARGIN_MM     = 150
 WALL_APPROACH_MM   = 180
-CROSS_MARGIN_MM    = 150
+CROSS_MARGIN_MM    = 250
 POSITION_TOL_MM    = 50
-APPROACH_OFFSET_MM = 30
+APPROACH_OFFSET_MM = 80
 GOAL_MIN_GAP_MM    = 60
 GOAL_APPROACH_MM   = 220
 
-TURN_TIMEOUT_S     = 1.5
+TURN_TIMEOUT_S     = 0.7
 ROUTE_INTERVAL_S   = 3.0
 BALL_DRIVE_SPEED   = 10
 REVERSE_THRESHOLD  = 181
@@ -53,14 +53,14 @@ HEADING_SMOOTH_ALPHA = 0.15
 POSE_SMOOTH_ALPHA    = 0.60
 
 # --- NEW GREEN TRACKING GEOMETRY ---
-GREEN_H_MIN      = 25
+GREEN_H_MIN      = 33
 GREEN_H_MAX      = 95
-GREEN_S_MIN      = 50
-GREEN_V_MIN      = 50
-MIN_BLOB_AREA    = 60
+GREEN_S_MIN      = 45
+GREEN_V_MIN      = 45
+MIN_BLOB_AREA    = 5
 
-ROBOT_WIDTH_MM   = 185.0
-ROBOT_LENGTH_MM  = 280.0
+ROBOT_WIDTH_MM   = 190.0
+ROBOT_LENGTH_MM  = 288.0
 HALF_W           = ROBOT_WIDTH_MM / 2.0
 LENGTH           = ROBOT_LENGTH_MM
 SIDE_SIGN        = 1.0
@@ -634,6 +634,7 @@ def draw_goals(world_img, goals_mm, scale=DISPLAY_SCALE):
 # ════════════════════════════════════════════════════════════════════════════
 
 cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
+cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 if not cap.isOpened():
@@ -716,10 +717,12 @@ def robot_executor():
             if wp_type == NAV and last_dir_info.get("heading") is not None:
                 if abs((target_h - last_dir_info["heading"] + 180) % 360 - 180) > REVERSE_THRESHOLD:
                     target_h, drive_sign = (target_h + 180) % 360, -1
-            speed = 300
-            if abs((target_h - last_dir_info.get("heading", 0) + 180) % 360 - 180) > 30:
-                speed = 600
-            if not robot.turn_to_heading(target_h, lambda: last_dir_info.get("heading"), pulse_ms=speed, timeout=TURN_TIMEOUT_S, stop_fn=lambda: robot_stop_req.is_set()):
+            ##juster hastighed her
+            time_wheel_spinning = abs((target_h - last_dir_info.get("heading", 0) + 180) % 360 - 180)*65
+            if abs((target_h - last_dir_info.get("heading", 0) + 180) % 360 - 180) < 10:
+                time_wheel_spinning = 400
+            
+            if not robot.turn_to_heading(target_h, lambda: last_dir_info.get("heading"), pulse_ms=time_wheel_spinning, timeout=TURN_TIMEOUT_S, stop_fn=lambda: robot_stop_req.is_set()):
                 if robot_stop_req.is_set(): robot_running.clear(); robot_stop_req.clear(); continue
                 with route_lock: current_route.insert(0, wp)
                 time.sleep(0.5); continue
