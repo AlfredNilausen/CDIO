@@ -771,9 +771,10 @@ def robot_executor():
                 with route_lock: current_route.insert(0, wp)
                 time.sleep(0.5); continue
 
+            
             # --- DYNAMIC TOLERANCE ---
-            if wp_type == GOAL:
-                tol = 130  # High tolerance so it doesn't have to perfectly hit the physical wall
+            elif wp_type == GOAL: 
+                tol = 100
             elif wp_type == BALL:
                 tol = APPROACH_OFFSET_MM
             else:

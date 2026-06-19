@@ -40,7 +40,7 @@ BALL_SPEED     = 10   # slower when sweeping through a ball
 TURN_SPEED     = 10
 COLLECT_SPEED  = 30
 COLLECT_TIME_S = 1.5
-EJECT_TIME_S   = 1.5
+EJECT_TIME_S   = 20
 
 motor_right   = LargeMotor(OUTPUT_A)
 motor_left    = LargeMotor(OUTPUT_D)

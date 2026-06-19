@@ -73,8 +73,8 @@ class RobotClient:
     def collect(self):
         return self._send({"type": "collect"})
 
-    def eject(self):
-        return self._send({"type": "eject"})
+    def eject(self, speed=100, duration=1000.0):
+        return self._send({"type": "eject", "speed": int(speed), "duration": float(duration)})
 
     def drive_mm(self, mm, speed=None):
         cmd = {"type": "drive", "mm": float(mm)}
