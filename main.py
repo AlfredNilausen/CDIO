@@ -32,6 +32,7 @@ DISPLAY_SCALE      = 0.5
 SMOOTH_ALPHA       = 0.80
 
 COLLECTION_ROUND = 1  # 1 = kun frie bolde, 2 = væg-bolde
+APPROACH_OFFSET_MM_R2 = 150  # Større afstand til bold i runde 2
 
 ARUCO_DICT         = aruco.DICT_4X4_50
 ROBOT_MARKER_ID    = 0
@@ -791,7 +792,7 @@ def robot_executor():
             elif wp_type == GOAL: 
                 tol = GOAL_TOL_MM
             elif wp_type == BALL:
-                tol = APPROACH_OFFSET_MM
+                tol = APPROACH_OFFSET_MM_R2 if COLLECTION_ROUND == 2 else APPROACH_OFFSET_MM
             else:
                 tol = POSITION_TOL_MM
 
