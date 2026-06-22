@@ -31,6 +31,8 @@ CAMERA_INDEX       = 1
 DISPLAY_SCALE      = 0.5
 SMOOTH_ALPHA       = 0.80
 
+COLLECTION_ROUND = 1  # 1 = kun frie bolde, 2 = væg-bolde
+
 ARUCO_DICT         = aruco.DICT_4X4_50
 ROBOT_MARKER_ID    = 0
 HEADING_OFFSET_DEG = 0.0
@@ -585,13 +587,25 @@ def _add_waypoints(route, current, target, cross_mm, wp_type):
 def plan_route(white_mm, orange_mm, robot_mm, cross_mm, goals_mm):
     route   = []
     current = robot_mm
-    
-    # Filter: Keep only free balls
-    free_white = [b for b in white_mm if _wall_approach(b) is None]
-    free_orange = [b for b in orange_mm if _wall_approach(b) is None]
+
+    def _inside_cross_zone(ball_mm, cross_mm):
+        if cross_mm is None:
+            return False
+        return _dist(ball_mm, cross_mm) < CROSS_MARGIN_MM
+
+    if COLLECTION_ROUND == 1:
+        free_white = [b for b in white_mm if _wall_approach(b) is None and not _inside_cross_zone(b, cross_mm)]
+        free_orange = [b for b in orange_mm if _wall_approach(b) is None and not _inside_cross_zone(b, cross_mm)]
+    else:
+        free_white = list(white_mm)
+        free_orange = list(orange_mm)
 
     def add_ball(ball):
         nonlocal current
+        approach = _wall_approach(ball)
+        if approach and COLLECTION_ROUND == 2:
+            # Kør først til approach-punktet, derefter ind til bolden
+            current = _add_waypoints(route, current, approach, cross_mm, NAV)
         current = _add_waypoints(route, current, ball, cross_mm, BALL)
 
     remaining = list(free_white)
@@ -803,10 +817,19 @@ def robot_executor():
         elif wp_type == BALL: 
             time.sleep(1.5)
             _replan_from_camera()
-            
-        elif wp_type == GOAL: 
+
+        elif wp_type == GOAL:
             robot.eject()
-            robot_running.clear()
+            global COLLECTION_ROUND
+            if COLLECTION_ROUND == 1:
+                COLLECTION_ROUND = 2
+                print("[robot] Runde 1 færdig - starter runde 2 (væg-bolde)")
+                time.sleep(2.0)  # Vent på at eject er færdig
+                _replan_from_camera()
+                robot_running.set()
+            else:
+                print("[robot] Alle bolde samlet og afleveret!")
+                robot_running.clear()
 
 threading.Thread(target=robot_executor, daemon=True).start()
 
