@@ -45,8 +45,8 @@ CROSS_MARGIN_MM    = 250
 POSITION_TOL_MM    = 50
 APPROACH_OFFSET_MM = 80
 GOAL_MIN_GAP_MM    = 60
-GOAL_APPROACH_MM   = 350
-GOAL_TOL_MM       = 170
+GOAL_APPROACH_MM   = 400
+GOAL_TOL_MM        = 250
 
 TURN_TIMEOUT_S     = 0.7
 ROUTE_INTERVAL_S   = 3.0
@@ -63,8 +63,8 @@ GREEN_S_MIN      = 45
 GREEN_V_MIN      = 45
 MIN_BLOB_AREA    = 5
 
-ROBOT_WIDTH_MM   = 190.0
-ROBOT_LENGTH_MM  = 288.0
+ROBOT_WIDTH_MM   = 195.0
+ROBOT_LENGTH_MM  = 265.0
 HALF_W           = ROBOT_WIDTH_MM / 2.0
 LENGTH           = ROBOT_LENGTH_MM
 SIDE_SIGN        = 1.0
@@ -107,7 +107,7 @@ class DetectorConfig:
     min_radius:   int   = 6
     max_radius:   int   = 11
     white_s_max:  int   = 130
-    orange_h_min: int   = 12
+    orange_h_min: int   = 4
     orange_h_max: int   = 35
     orange_s_min: int   = 70
     orange_v_min: int   = 85
@@ -264,7 +264,8 @@ _BOARD_OBJ_PTS = np.array([
 def _line_intersect(p1, p2, p3, p4):
     x1, y1 = p1; x2, y2 = p2; x3, y3 = p3; x4, y4 = p4
     d = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
-    if abs(d) < 1e-9: return None
+    if abs(d) < 1e-9:
+        return None
     px = ((x1*y2 - y1*x2)*(x3-x4) - (x1-x2)*(x3*y4 - y3*x4)) / d
     py = ((x1*y2 - y1*x2)*(y3-y4) - (y1-y2)*(x3*y4 - y3*x4)) / d
     return px, py
@@ -274,14 +275,17 @@ def estimate_focal_length(corners_px, principal_point):
     BL, BR = corners_px["BL"], corners_px["BR"]
     vp1 = _line_intersect(TL, TR, BL, BR)
     vp2 = _line_intersect(TL, BL, TR, BR)
-    if vp1 is None or vp2 is None: return None
+    if vp1 is None or vp2 is None:
+        return None
     px, py = principal_point
     dot = (vp1[0]-px)*(vp2[0]-px) + (vp1[1]-py)*(vp2[1]-py)
     f_sq = -dot
-    if f_sq <= 0: return None
+    if f_sq <= 0:
+        return None
     f = math.sqrt(f_sq)
     diag = math.hypot(2*px, 2*py)
-    if not (0.3*diag <= f <= 6*diag): return None
+    if not (0.3*diag <= f <= 6*diag):
+        return None
     return f
 
 _focal_length_est = None
@@ -301,7 +305,8 @@ def board_pose(corners_px, cam_mat, dist_coef):
         _BOARD_OBJ_PTS, img_pts, cam_mat, dist_coef,
         flags=cv2.SOLVEPNP_IPPE,
     )
-    if not ok: return None
+    if not ok:
+        return None
     R, _ = cv2.Rodrigues(rvec)
     return R, tvec
 
@@ -314,15 +319,18 @@ def detect_heading(frame):
     cam, dist = _camera_matrix(frame.shape)
     gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     corners, ids, _ = _aruco_detector.detectMarkers(gray)
-    if ids is None: return {"found": False}
+    if ids is None:
+        return {"found": False}
     for i, mid in enumerate(ids.flatten()):
-        if mid != ROBOT_MARKER_ID: continue
+        if mid != ROBOT_MARKER_ID:
+            continue
         mc = corners[i][0]
         ok, rvec, tvec = cv2.solvePnP(
             _OBJ_PTS, mc.astype(np.float32), cam, dist,
             flags=cv2.SOLVEPNP_IPPE_SQUARE,
         )
-        if not ok: continue
+        if not ok:
+            continue
         R, _ = cv2.Rodrigues(rvec)
         heading = math.degrees(math.atan2(-R[1, 0], R[0, 0])) + HEADING_OFFSET_DEG
         return {
@@ -371,7 +379,8 @@ def top_from_known_marker(pt_world, label, heading_deg):
 
 def solve_from_any_labeled_points(labels_found, heading_deg):
     usable = {k: v for k, v in labels_found.items() if k in MODEL}
-    if not usable: return None, None
+    if not usable:
+        return None, None
     top_candidates = [top_from_known_marker(pt, label, heading_deg) for label, pt in usable.items()]
     tx = sum(p[0] for p in top_candidates) / len(top_candidates)
     ty = sum(p[1] for p in top_candidates) / len(top_candidates)
@@ -397,9 +406,11 @@ def detect_green_blobs(frame):
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     blobs = []
     for c in cnts:
-        if cv2.contourArea(c) < MIN_BLOB_AREA: continue
+        if cv2.contourArea(c) < MIN_BLOB_AREA:
+            continue
         M = cv2.moments(c)
-        if abs(M["m00"]) < 1e-6: continue
+        if abs(M["m00"]) < 1e-6:
+            continue
         blobs.append((int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])))
     return blobs
 
@@ -409,7 +420,8 @@ def classify_visible_blobs(blobs_world, heading_deg, aruco_center_world):
     pts = [{"pt": p, "pf": dot2(p, f), "ps": dot2(p, s)} for p in blobs_world]
     n = len(pts)
     labels = {}
-    if n == 0: return {}, "none"
+    if n == 0:
+        return {}, "none"
 
     if n == 4:
         pts_sorted = sorted(pts, key=lambda t: t["pf"], reverse=True)
@@ -471,23 +483,31 @@ def classify_visible_blobs(blobs_world, heading_deg, aruco_center_world):
         rel = sub2(p, aruco_center_world)
         is_front = dot2(rel, f) >= 0
         is_left = dot2(rel, s) < 0
-        if is_front and is_left: labels["FL"] = p
-        elif is_front and not is_left: labels["FR"] = p
-        elif not is_front and is_left: labels["BL"] = p
-        else: labels["BR"] = p
+        if is_front and is_left:
+            labels["FL"] = p
+        elif is_front and not is_left:
+            labels["FR"] = p
+        elif not is_front and is_left:
+            labels["BL"] = p
+        else:
+            labels["BR"] = p
         return labels, "1pt"
 
     return {}, "unknown"
 
 def assign_using_last_pose(blobs_world, last_solved_markers, max_dist=MAX_HISTORY_ASSIGN_MM):
-    if last_solved_markers is None: return {}
+    if last_solved_markers is None:
+        return {}
     labels_found, used_labels = {}, set()
     for p in blobs_world:
         best_lab, best_d = None, float("inf")
         for lab, prev_pt in last_solved_markers.items():
-            if lab in used_labels: continue
+            if lab in used_labels:
+                continue
             d = dist2(p, prev_pt)
-            if d < best_d: best_d = d; best_lab = lab
+            if d < best_d:
+                best_d = d
+                best_lab = lab
         if best_lab is not None and best_d <= max_dist:
             labels_found[best_lab] = p
             used_labels.add(best_lab)
@@ -505,7 +525,8 @@ def solve_robot_from_labels(labels_found, case_name, heading_deg, last_top_cente
 # ROUTE PLANNING
 # ════════════════════════════════════════════════════════════════════════════
 
-def _dist(a, b): return math.hypot(a[0] - b[0], a[1] - b[1])
+def _dist(a, b):
+    return math.hypot(a[0] - b[0], a[1] - b[1])
 
 def point_inside_robot(point, solved_markers):
     """
@@ -530,19 +551,22 @@ def point_inside_robot(point, solved_markers):
         (float(point[0]), float(point[1])),
         False
     ) >= 0
-    
+
 def _seg_dist(p1, p2, pt):
     dx, dy = p2[0] - p1[0], p2[1] - p1[1]
-    if dx == dy == 0: return _dist(p1, pt)
+    if dx == dy == 0:
+        return _dist(p1, pt)
     t = max(0.0, min(1.0, ((pt[0]-p1[0])*dx + (pt[1]-p1[1])*dy) / (dx*dx + dy*dy)))
     return _dist((p1[0] + t*dx, p1[1] + t*dy), pt)
 
 def _detour(p1, p2, cross_mm):
-    if _seg_dist(p1, p2, cross_mm) >= CROSS_MARGIN_MM: return [p2]
+    if _seg_dist(p1, p2, cross_mm) >= CROSS_MARGIN_MM:
+        return [p2]
     cx, cy = cross_mm
     dx, dy = p2[0] - p1[0], p2[1] - p1[1]
     lsq = dx*dx + dy*dy
-    if lsq < 1e-9: return [p2]
+    if lsq < 1e-9:
+        return [p2]
     t = max(0.0, min(1.0, ((cx - p1[0])*dx + (cy - p1[1])*dy) / lsq))
     clx, cly = p1[0] + t*dx, p1[1] + t*dy
     vx, vy = clx - cx, cly - cy
@@ -550,38 +574,57 @@ def _detour(p1, p2, cross_mm):
     if mag < 1e-9:
         pl = math.hypot(dx, dy)
         vx, vy, mag = -dy / pl, dx / pl, 1.0
-    push   = CROSS_MARGIN_MM * 1.8
+    push = CROSS_MARGIN_MM * 1.8
     return [(cx + vx / mag * push, cy + vy / mag * push), p2]
 
 def _wall_approach(ball_mm):
     x, y   = ball_mm
     apd    = WALL_APPROACH_MM
     margin = WALL_MARGIN_MM
-    near_L = x < margin; near_R = BOARD_WIDTH_MM - x < margin
-    near_B = y < margin; near_T = BOARD_HEIGHT_MM - y < margin
+    near_L = x < margin
+    near_R = BOARD_WIDTH_MM - x < margin
+    near_B = y < margin
+    near_T = BOARD_HEIGHT_MM - y < margin
 
-    if near_L and near_B: return (x + apd, y + apd)
-    if near_R and near_B: return (x - apd, y + apd)
-    if near_L and near_T: return (x + apd, y - apd)
-    if near_R and near_T: return (x - apd, y - apd)
-    if near_L: return (x + apd, y)
-    if near_R: return (x - apd, y)
-    if near_B: return (x, y + apd)
-    if near_T: return (x, y - apd)
+    if near_L and near_B:
+        return (x + apd, y + apd)
+    if near_R and near_B:
+        return (x - apd, y + apd)
+    if near_L and near_T:
+        return (x + apd, y - apd)
+    if near_R and near_T:
+        return (x - apd, y - apd)
+    if near_L:
+        return (x + apd, y)
+    if near_R:
+        return (x - apd, y)
+    if near_B:
+        return (x, y + apd)
+    if near_T:
+        return (x, y - apd)
     return None
+
+# NY helper: genkender en bold langs væg/kant
+def _is_wall_ball(ball_mm):
+    return _wall_approach(ball_mm) is not None
 
 def _goal_approach(goal_mm):
     x, y = goal_mm
     d = GOAL_APPROACH_MM
-    if x < 10: return (d, y)
-    if x > BOARD_WIDTH_MM - 10: return (BOARD_WIDTH_MM - d, y)
-    if y < 10: return (x, d)
-    if y > BOARD_HEIGHT_MM - 10: return (x, BOARD_HEIGHT_MM - d)
+    if x < 10:
+        return (d, y)
+    if x > BOARD_WIDTH_MM - 10:
+        return (BOARD_WIDTH_MM - d, y)
+    if y < 10:
+        return (x, d)
+    if y > BOARD_HEIGHT_MM - 10:
+        return (x, BOARD_HEIGHT_MM - d)
     return None
 
 def _add_waypoints(route, current, target, cross_mm, wp_type):
     path = _detour(current, target, cross_mm)
-    for wp in path[:-1]: route.append((wp[0], wp[1], NAV))
+    for wp in path[:-1]:
+        route.append((wp[0], wp[1], NAV))
     route.append((target[0], target[1], wp_type))
     return target
 
@@ -598,15 +641,19 @@ def plan_route(white_mm, orange_mm, robot_mm, cross_mm, goals_mm):
         free_white = [b for b in white_mm if _wall_approach(b) is None and not _inside_cross_zone(b, cross_mm)]
         free_orange = [b for b in orange_mm if _wall_approach(b) is None and not _inside_cross_zone(b, cross_mm)]
     else:
-        free_white = list(white_mm)
-        free_orange = list(orange_mm)
+        free_white  = [b for b in white_mm  if not _inside_cross_zone(b, cross_mm)]
+        free_orange = [b for b in orange_mm if not _inside_cross_zone(b, cross_mm)]
 
     def add_ball(ball):
         nonlocal current
         approach = _wall_approach(ball)
+
         if approach and COLLECTION_ROUND == 2:
-            # Kør først til approach-punktet, derefter ind til bolden
-            current = _add_waypoints(route, current, approach, cross_mm, NAV)
+            # Hvis robotten allerede står tæt på approach-punktet,
+            # så læg det ikke ind igen (forhindrer loop ved replanning).
+            if _dist(current, approach) > POSITION_TOL_MM:
+                current = _add_waypoints(route, current, approach, cross_mm, NAV)
+
         current = _add_waypoints(route, current, ball, cross_mm, BALL)
 
     remaining = list(free_white)
@@ -615,16 +662,17 @@ def plan_route(white_mm, orange_mm, robot_mm, cross_mm, goals_mm):
         remaining.remove(nxt)
         add_ball(nxt)
 
-    for nxt in free_orange: add_ball(nxt)
+    for nxt in free_orange:
+        add_ball(nxt)
 
     if not free_white and not free_orange and goals_mm:
         goal     = min(goals_mm, key=lambda g: _dist(current, g))
         approach = _goal_approach(goal)
-        
+
         # Only add the approach waypoint if the robot is far away from it
-        if approach and _dist(current, approach) > 100: 
+        if approach and _dist(current, approach) > 100:
             current = _add_waypoints(route, current, approach, cross_mm, NAV)
-            
+
         _add_waypoints(route, current, goal, cross_mm, GOAL)
 
     return route
@@ -635,7 +683,8 @@ def plan_route(white_mm, orange_mm, robot_mm, cross_mm, goals_mm):
 # ════════════════════════════════════════════════════════════════════════════
 
 def draw_route(world_img, route, start_mm, scale=DISPLAY_SCALE):
-    if not route: return
+    if not route:
+        return
     color_map = {NAV: (80, 180, 80), BALL: (0, 255, 255), GOAL: (0, 140, 255)}
     pts = [world_to_view(start_mm, scale)] + [world_to_view((p[0], p[1]), scale) for p in route]
     for i in range(len(pts) - 1):
@@ -643,12 +692,14 @@ def draw_route(world_img, route, start_mm, scale=DISPLAY_SCALE):
         cv2.line(world_img, pts[i], pts[i+1], col, 2)
 
 def draw_robot_solution(world_img, solved_markers, top_center, heading_deg, display_scale, case_name, measured_labels=None):
-    if measured_labels is None: measured_labels = set(solved_markers.keys())
+    if measured_labels is None:
+        measured_labels = set(solved_markers.keys())
     color_measured  = {"FL": (0, 255, 255), "FR": (255, 255, 0), "BL": (255, 0, 255), "BR": (0, 165, 255)}
     color_estimated = {"FL": (0, 180, 180), "FR": (180, 180, 0), "BL": (180, 0, 180), "BR": (0, 110, 180)}
 
     for label in ["FL", "FR", "BL", "BR"]:
-        if label not in solved_markers: continue
+        if label not in solved_markers:
+            continue
         p_view = world_to_view(solved_markers[label], display_scale)
         measured = label in measured_labels
         col = color_measured[label] if measured else color_estimated[label]
@@ -723,11 +774,13 @@ route_lock     = threading.Lock()
 def _replan_from_camera():
     global last_route
     wait_end = time.time() + 3.0
-    while last_H_px_world is None and time.time() < wait_end: time.sleep(0.1)
+    while last_H_px_world is None and time.time() < wait_end:
+        time.sleep(0.1)
 
     if last_H_px_world is None:
         print("[robot] No homography - cannot replan, stopping")
-        robot_running.clear(); return
+        robot_running.clear()
+        return
 
     cross_mm = (last_cross["center_mm"] if last_cross else (BOARD_WIDTH_MM / 2.0, BOARD_HEIGHT_MM / 2.0))
     w_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in last_whites_px]
@@ -738,20 +791,27 @@ def _replan_from_camera():
         current_route.clear()
         current_route.extend(new_route)
 
-    if new_route: print(f"[robot] Replanned: {len(new_route)} waypoints")
+    if new_route:
+        print(f"[robot] Replanned: {len(new_route)} waypoints")
     else:
         print("[robot] All balls collected - heading to goal")
-        robot.stop(); robot_running.clear()
+        robot.stop()
+        robot_running.clear()
 
 def robot_executor():
+    global COLLECTION_ROUND
     while True:
         robot_running.wait()
         with route_lock:
             if not current_route:
-                robot_running.clear(); continue
+                robot_running.clear()
+                continue
             wp = current_route.pop(0)
 
-        if robot_stop_req.is_set(): robot_running.clear(); robot_stop_req.clear(); continue
+        if robot_stop_req.is_set():
+            robot_running.clear()
+            robot_stop_req.clear()
+            continue
 
         pos, wp_pos, wp_type = start_mm, (wp[0], wp[1]), wp[2]
 
@@ -759,7 +819,8 @@ def robot_executor():
             detour_pts = _detour(pos, wp_pos, last_cross["center_mm"])
             if len(detour_pts) > 1:
                 bypass_pt = detour_pts[0]
-                with route_lock: current_route.insert(0, wp)
+                with route_lock:
+                    current_route.insert(0, wp)
                 wp, wp_pos, wp_type = (bypass_pt[0], bypass_pt[1], NAV), bypass_pt, NAV
 
         dx, dy = wp_pos[0] - pos[0], wp_pos[1] - pos[1]
@@ -767,6 +828,7 @@ def robot_executor():
             target_h, drive_sign = math.degrees(math.atan2(dy, dx)), 1
             current_h = last_dir_info.get("heading")
 
+            time_wheel_spinning = 3000
             if current_h is not None:
                 # Check for reverse if NAV
                 if wp_type == NAV:
@@ -775,21 +837,33 @@ def robot_executor():
 
                 # Calculate the shortest angle difference for turn pulse
                 angle_diff = abs((target_h - current_h + 180) % 360 - 180)
-                
+
                 time_wheel_spinning = 3000
                 if angle_diff < 30:
                     time_wheel_spinning = 1700
+                elif angle_diff < 20:
+                    time_wheel_spinning = 1000
                 elif angle_diff < 10:
                     time_wheel_spinning = 400
 
-            if not robot.turn_to_heading(target_h, lambda: last_dir_info.get("heading"), pulse_ms=time_wheel_spinning, timeout=TURN_TIMEOUT_S, stop_fn=lambda: robot_stop_req.is_set()):
-                if robot_stop_req.is_set(): robot_running.clear(); robot_stop_req.clear(); continue
-                with route_lock: current_route.insert(0, wp)
-                time.sleep(0.5); continue
+            if not robot.turn_to_heading(
+                target_h,
+                lambda: last_dir_info.get("heading"),
+                pulse_ms=time_wheel_spinning,
+                timeout=TURN_TIMEOUT_S,
+                stop_fn=lambda: robot_stop_req.is_set()
+            ):
+                if robot_stop_req.is_set():
+                    robot_running.clear()
+                    robot_stop_req.clear()
+                    continue
+                with route_lock:
+                    current_route.insert(0, wp)
+                time.sleep(0.5)
+                continue
 
-            
             # --- DYNAMIC TOLERANCE ---
-            elif wp_type == GOAL: 
+            if wp_type == GOAL:
                 tol = GOAL_TOL_MM
             elif wp_type == BALL:
                 tol = APPROACH_OFFSET_MM_R2 if COLLECTION_ROUND == 2 else APPROACH_OFFSET_MM
@@ -797,31 +871,50 @@ def robot_executor():
                 tol = POSITION_TOL_MM
 
             speed = 20
-            if wp_type == BALL: speed = 40
-            
-            robot.drive_to_position(wp_pos, lambda: start_mm, reverse=(drive_sign < 0), tol_mm=tol, speed=speed, timeout=6.0, stop_fn=lambda: robot_stop_req.is_set(), get_heading_fn=lambda: last_dir_info.get("heading"))
+            if wp_type == BALL:
+                speed = 40
 
-        if robot_stop_req.is_set(): robot_running.clear(); robot_stop_req.clear(); continue
+            robot.drive_to_position(
+                wp_pos,
+                lambda: start_mm,
+                reverse=(drive_sign < 0),
+                tol_mm=tol,
+                speed=speed,
+                timeout=6.0,
+                stop_fn=lambda: robot_stop_req.is_set(),
+                get_heading_fn=lambda: last_dir_info.get("heading")
+            )
+
+        if robot_stop_req.is_set():
+            robot_running.clear()
+            robot_stop_req.clear()
+            continue
 
         if wp_type == NAV:
             robot.motor_stop()
             time.sleep(0.25)
-            
-            # --- FIX: Prevent infinite replan loops when heading to the goal ---
+
+            # Kun recalc hvis næste waypoint er BALL,
+            # men IKKE hvis vi i runde 2 står ved approach til en væg-bold.
             with route_lock:
                 next_wp = current_route[0] if current_route else None
-            # Only recalculate if the next target is a ball
+
             if next_wp and next_wp[2] == BALL:
-                _replan_from_camera()
+                next_ball_pos = (next_wp[0], next_wp[1])
+
+                # Forhindrer loop: når approach er nået i runde 2,
+                # så kør direkte til væg-bolden uden ny replanning.
+                if not (COLLECTION_ROUND == 2 and _is_wall_ball(next_ball_pos)):
+                    _replan_from_camera()
             continue
-            
-        elif wp_type == BALL: 
+
+        elif wp_type == BALL:
             time.sleep(1.5)
             _replan_from_camera()
 
         elif wp_type == GOAL:
             robot.eject()
-            global COLLECTION_ROUND
+
             if COLLECTION_ROUND == 1:
                 COLLECTION_ROUND = 2
                 print("[robot] Runde 1 færdig - starter runde 2 (væg-bolde)")
@@ -839,12 +932,14 @@ threading.Thread(target=robot_executor, daemon=True).start()
 # MAIN LOOP
 # ════════════════════════════════════════════════════════════════════════════
 
-for win in ["camera", "world", "edges"]: cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+for win in ["camera", "world", "edges"]:
+    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
 print("Keys:  r=route  g=go  s=stop  c=collect  e=eject  p=status  ESC=quit")
 
 while True:
     ret, frame = cap.read()
-    if not ret: break
+    if not ret:
+        break
     display = frame.copy()
 
     # ── 1. Board detection ──────────────────────────────────────────────────
@@ -865,42 +960,61 @@ while True:
             "BR": intersect_horizontal_vertical(mdl["bottom"], mdl["right"]),
         }
         if all(v is not None for v in new_corners.values()):
-            if prev_corners is None: corners = new_corners
-            else: corners = {n: (int(SMOOTH_ALPHA * prev_corners[n][0] + (1 - SMOOTH_ALPHA) * new_corners[n][0]), int(SMOOTH_ALPHA * prev_corners[n][1] + (1 - SMOOTH_ALPHA) * new_corners[n][1])) for n in new_corners}
+            if prev_corners is None:
+                corners = new_corners
+            else:
+                corners = {
+                    n: (
+                        int(SMOOTH_ALPHA * prev_corners[n][0] + (1 - SMOOTH_ALPHA) * new_corners[n][0]),
+                        int(SMOOTH_ALPHA * prev_corners[n][1] + (1 - SMOOTH_ALPHA) * new_corners[n][1])
+                    )
+                    for n in new_corners
+                }
             prev_corners = corners
 
             last_H_px_world, H_px_to_view, dw, dh = compute_homographies(corners, DISPLAY_SCALE)
             f_est = estimate_focal_length(corners, (frame.shape[1] / 2.0, frame.shape[0] / 2.0))
-            if f_est is not None: _focal_length_est = f_est if _focal_length_est is None else SMOOTH_ALPHA * _focal_length_est + (1 - SMOOTH_ALPHA) * f_est
+            if f_est is not None:
+                _focal_length_est = f_est if _focal_length_est is None else SMOOTH_ALPHA * _focal_length_est + (1 - SMOOTH_ALPHA) * f_est
 
             pose = board_pose(corners, *_camera_matrix(frame.shape))
-            if pose is not None: last_board_pose = pose
+            if pose is not None:
+                last_board_pose = pose
 
             world_raw = cv2.warpPerspective(frame, H_px_to_view, (dw, dh))
             world_img = world_raw.copy()
             draw_world_grid(world_img, DISPLAY_SCALE, step_mm=200)
 
             cross = detect_cross(world_raw, DISPLAY_SCALE)
-            if cross: last_cross = cross
-            if last_cross: cv2.circle(world_img, last_cross["center_view"], 6, (0, 0, 255), -1)
+            if cross:
+                last_cross = cross
+            if last_cross:
+                cv2.circle(world_img, last_cross["center_view"], 6, (0, 0, 255), -1)
 
             draw_goals(world_img, last_goals)
 
     # ── 4. Green blobs ───────────────────────────────────────────────────────
     green_blobs_px = detect_green_blobs(frame)
-    for p in green_blobs_px: cv2.circle(display, p, 8, (0, 255, 0), 2)
+    for p in green_blobs_px:
+        cv2.circle(display, p, 8, (0, 255, 0), 2)
 
     # ── 5. Balls ─────────────────────────────────────────────────────────────
     whites_px, oranges_px, edges = detect_balls(frame, cfg)
     if green_blobs_px:
-        whites_px = [(cx, cy, r) for cx, cy, r in whites_px if not any(math.hypot(cx - gx, cy - gy) < r + 20 for gx, gy in green_blobs_px)]
+        whites_px = [
+            (cx, cy, r) for cx, cy, r in whites_px
+            if not any(math.hypot(cx - gx, cy - gy) < r + 20 for gx, gy in green_blobs_px)
+        ]
     last_whites_px, last_oranges_px = whites_px, oranges_px
 
-    for (x, y, r) in whites_px: cv2.circle(display, (x, y), r, (0, 255, 255), 2)
-    for (x, y, r) in oranges_px: cv2.circle(display, (x, y), r, (0, 128, 255), 2)
-    if last_H_px_world is not None: draw_balls(world_img, whites_px, oranges_px, last_H_px_world)
+    for (x, y, r) in whites_px:
+        cv2.circle(display, (x, y), r, (0, 255, 255), 2)
+    for (x, y, r) in oranges_px:
+        cv2.circle(display, (x, y), r, (0, 128, 255), 2)
+    if last_H_px_world is not None:
+        draw_balls(world_img, whites_px, oranges_px, last_H_px_world)
 
-    # ── 6. Heading + POSITION TRACKING ─────────────────────────────────────────
+    # ── 6. Heading + POSITION TRACKING ──────────────────────────────────────
     dir_info = detect_heading(frame)
     if dir_info["found"]:
         if last_dir_info.get("found"):
@@ -921,7 +1035,9 @@ while True:
             labels_found, case_name = classify_visible_blobs(blobs_world, dir_info["heading"], aruco_center_world)
             measured_labels = set(k for k in labels_found.keys() if k in MODEL)
 
-            solved_markers, top_center = solve_robot_from_labels(labels_found, case_name, dir_info["heading"], LAST_TOP_CENTER, LAST_SOLVED_MARKERS)
+            solved_markers, top_center = solve_robot_from_labels(
+                labels_found, case_name, dir_info["heading"], LAST_TOP_CENTER, LAST_SOLVED_MARKERS
+            )
 
             # History Fallback Trigger
             if (solved_markers is None or top_center is None) and LAST_SOLVED_MARKERS is not None and len(blobs_world) > 0:
@@ -939,7 +1055,10 @@ while True:
                     CURRENT_ROBOT_POLYGON = dict(solved_markers)
                     new_pos = top_center  # Setting position to the FRONT of the robot!
                     last_pos_source = f"green({case_name})"
-                    draw_robot_solution(world_img, solved_markers, top_center, dir_info["heading"], DISPLAY_SCALE, case_name, measured_labels)
+                    draw_robot_solution(
+                        world_img, solved_markers, top_center, dir_info["heading"],
+                        DISPLAY_SCALE, case_name, measured_labels
+                    )
             elif last_board_pose is not None:
                 new_pos = marker_ground_position(dir_info["tvec"], last_board_pose)
                 last_pos_source = "aruco"
@@ -957,11 +1076,16 @@ while True:
                     POSE_SMOOTH_ALPHA * start_mm[0] + (1 - POSE_SMOOTH_ALPHA) * new_pos[0],
                     POSE_SMOOTH_ALPHA * start_mm[1] + (1 - POSE_SMOOTH_ALPHA) * new_pos[1],
                 )
-            else: start_mm = new_pos
+            else:
+                start_mm = new_pos
 
-    cv2.putText(display, f"Pos:({start_mm[0]:.0f},{start_mm[1]:.0f})mm  src:{last_pos_source}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 0), 1)
+    cv2.putText(
+        display,
+        f"Pos:({start_mm[0]:.0f},{start_mm[1]:.0f})mm  src:{last_pos_source}",
+        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 0), 1
+    )
 
-    # ── 7. Route display ───────────────────────────────────────────────────────
+    # ── 7. Route display ────────────────────────────────────────────────────
     now = time.time()
     if now - last_route_time >= ROUTE_INTERVAL_S and last_H_px_world is not None and last_cross is not None and not robot_running.is_set():
         w_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in whites_px]
@@ -977,22 +1101,40 @@ while True:
 
     key = cv2.waitKey(1) & 0xFF
     if key == ord("r"):
-        if robot_running.is_set(): print("Robot running - press s first")
-        elif last_H_px_world is None or last_cross is None: print("Waiting for board + cross detection")
+        if robot_running.is_set():
+            print("Robot running - press s first")
+        elif last_H_px_world is None or last_cross is None:
+            print("Waiting for board + cross detection")
         else:
             w_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in whites_px]
             o_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in oranges_px]
             last_route = plan_route(w_mm, o_mm, start_mm, last_cross["center_mm"], last_goals)
-            with route_lock: current_route.clear(); current_route.extend(last_route)
+            with route_lock:
+                current_route.clear()
+                current_route.extend(last_route)
             print(f"Route: {len(last_route)} waypoints - press g to start")
     elif key == ord("g"):
-        if not robot.connected: print("Robot not connected")
-        elif not current_route: print("No route - press r first")
-        else: robot_stop_req.clear(); robot_running.set(); print("GO")
-    elif key == ord("s"): robot_stop_req.set(); robot_running.clear(); robot.stop(); print("STOP")
-    elif key == ord("c"): robot.collect(); print("Collect")
-    elif key == ord("e"): robot.eject(); print("Eject")
-    elif key == 27: break
+        if not robot.connected:
+            print("Robot not connected")
+        elif not current_route:
+            print("No route - press r first")
+        else:
+            robot_stop_req.clear()
+            robot_running.set()
+            print("GO")
+    elif key == ord("s"):
+        robot_stop_req.set()
+        robot_running.clear()
+        robot.stop()
+        print("STOP")
+    elif key == ord("c"):
+        robot.collect()
+        print("Collect")
+    elif key == ord("e"):
+        robot.eject()
+        print("Eject")
+    elif key == 27:
+        break
 
 cap.release()
 cv2.destroyAllWindows()
