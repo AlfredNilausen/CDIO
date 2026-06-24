@@ -201,11 +201,11 @@ def handle(cmd):
         while time.time() < end_time:
             # WIGGLE 1: Full Power Eject (Pushing balls out)
             motor_collect.on(SpeedPercent(-100)) # Max speed out
-            time.sleep(1.0)                      # Eject for 1 second
+            time.sleep(1.5)                      # Eject for 1 second
             
             # WIGGLE 2: Short Reverse/Collect (Unjamming the tube)
             motor_collect.on(SpeedPercent(60))   # Pull back slightly
-            time.sleep(0.3)                      # Quick 0.3 second jerk backwards
+            time.sleep(0.5)                      # Quick 0.3 second jerk backwards
             
         # 3. Final clear: give one last strong push out to clear the chamber
         motor_collect.on(SpeedPercent(-100))
