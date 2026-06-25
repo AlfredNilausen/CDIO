@@ -33,9 +33,7 @@ COLLECTION_ROUND = 1  # 1 = kun frie bolde, 2 = vaeg-bolde
 
 # Taet approach i runde 2 - robotten er allerede linet op vinkelret via
 # _wall_approach()-punktet, saa her skal den faktisk koere HELT ind til
-# bolden, ikke stoppe langt fra den. (Var tidligere 150mm, hvilket betoed
-# den stoppede naesten lige efter at have naaet wall-approach-punktet,
-# fordi det punkt allerede ligger ~WALL_APPROACH_MM fra bolden.)
+# bolden, ikke stoppe langt fra den.
 APPROACH_OFFSET_MM_R2 = 30
 
 ARUCO_DICT         = aruco.DICT_4X4_50
@@ -64,6 +62,8 @@ BALL_SLOWDOWN_DIST_MM  = 160
 
 HEADING_SMOOTH_ALPHA = 0.15
 POSE_SMOOTH_ALPHA    = 0.60
+TIME_FOR_FIRST_DEPOSIT = 300   # seconds - force one deposit trip after this
+IGNORE_BALL_DIST_MM    = 200   # balls closer than this to the robot are ignored
 
 GREEN_H_MIN      = 33
 GREEN_H_MAX      = 95
@@ -576,15 +576,24 @@ def plan_route(white_mm, orange_mm, robot_mm, cross_mm, goals_mm):
             return False
         return _dist(ball_mm, cross_mm) < CROSS_MARGIN_MM
 
+    def _too_close_to_robot(ball_mm):
+        return _dist(ball_mm, robot_mm) < IGNORE_BALL_DIST_MM
+
     if COLLECTION_ROUND == 1:
-        free_white = [b for b in white_mm if _wall_approach(b) is None and not _inside_cross_zone(b, cross_mm)]
-        free_orange = [b for b in orange_mm if _wall_approach(b) is None and not _inside_cross_zone(b, cross_mm)]
+        free_white = [b for b in white_mm if _wall_approach(b) is None
+                      and not _inside_cross_zone(b, cross_mm)
+                      and not _too_close_to_robot(b)]
+        free_orange = [b for b in orange_mm if _wall_approach(b) is None
+                       and not _inside_cross_zone(b, cross_mm)
+                       and not _too_close_to_robot(b)]
     else:
         # Round 2 drops the wall filter (it's specifically targeting wall
         # balls), but must KEEP excluding cross-zone balls - those are
         # unreachable/unsafe in either round.
-        free_white = [b for b in white_mm if not _inside_cross_zone(b, cross_mm)]
-        free_orange = [b for b in orange_mm if not _inside_cross_zone(b, cross_mm)]
+        free_white = [b for b in white_mm if not _inside_cross_zone(b, cross_mm)
+                      and not _too_close_to_robot(b)]
+        free_orange = [b for b in orange_mm if not _inside_cross_zone(b, cross_mm)
+                       and not _too_close_to_robot(b)]
 
     def add_ball(ball):
         nonlocal current
@@ -684,10 +693,31 @@ last_pos_source = "none"
 LAST_TOP_CENTER = None
 LAST_SOLVED_MARKERS = None
 
+# --- DEPOSIT TIMER ---
+collection_start_time = None   # set on first 'g' press
+forced_deposit_done   = False  # set True once the forced trip has happened
+
 robot_running  = threading.Event()
 robot_stop_req = threading.Event()
 current_route  = []
 route_lock     = threading.Lock()
+
+def _deposit_timer_expired():
+    """True once TIME_FOR_FIRST_DEPOSIT seconds have passed since the
+    first 'g' press and we haven't already done the forced deposit trip."""
+    return (collection_start_time is not None and not forced_deposit_done
+            and time.time() - collection_start_time > TIME_FOR_FIRST_DEPOSIT)
+
+
+def _maybe_force_deposit(w_mm, o_mm):
+    """Returns empty ball lists if the deposit timer has expired, which
+    makes plan_route() fall straight through to goal delivery regardless
+    of how many balls are actually still on the board."""
+    if _deposit_timer_expired():
+        print("[robot] {}s elapsed - forcing deposit trip".format(TIME_FOR_FIRST_DEPOSIT))
+        return [], []
+    return w_mm, o_mm
+
 
 def _replan_from_camera():
     global last_route
@@ -701,6 +731,7 @@ def _replan_from_camera():
     cross_mm = (last_cross["center_mm"] if last_cross else (BOARD_WIDTH_MM / 2.0, BOARD_HEIGHT_MM / 2.0))
     w_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in last_whites_px]
     o_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in last_oranges_px]
+    w_mm, o_mm = _maybe_force_deposit(w_mm, o_mm)
     new_route = plan_route(w_mm, o_mm, start_mm, cross_mm, last_goals)
     last_route = new_route
     with route_lock:
@@ -713,7 +744,7 @@ def _replan_from_camera():
         robot.stop(); robot_running.clear()
 
 def robot_executor():
-    global COLLECTION_ROUND
+    global COLLECTION_ROUND, forced_deposit_done
     while True:
         robot_running.wait()
         with route_lock:
@@ -746,9 +777,9 @@ def robot_executor():
                 
                 time_wheel_spinning = 3000
                 if angle_diff < 30:
-                    time_wheel_spinning = 1700
+                    time_wheel_spinning = 1500
                 elif angle_diff < 20:
-                    time_wheel_spinning = 1000
+                    time_wheel_spinning = 700
                 elif angle_diff < 10:
                     time_wheel_spinning = 400
 
@@ -781,9 +812,6 @@ def robot_executor():
                     if robot_stop_req.is_set():
                         robot_running.clear(); robot_stop_req.clear(); continue
 
-                    # Re-aim at the ball - the fast leg may have left us
-                    # slightly off-axis, and the camera should have
-                    # reacquired tracking now that we've slowed down.
                     cur_h2 = last_dir_info.get("heading")
                     dx2, dy2 = wp_pos[0] - start_mm[0], wp_pos[1] - start_mm[1]
                     target_h2 = math.degrees(math.atan2(dy2, dx2))
@@ -809,16 +837,12 @@ def robot_executor():
             robot.motor_stop()
             time.sleep(0.25)
 
-            # Kun recalc hvis næste waypoint er BALL,
-            # men IKKE hvis vi i runde 2 står ved approach til en væg-bold.
             with route_lock:
                 next_wp = current_route[0] if current_route else None
 
             if next_wp and next_wp[2] == BALL:
                 next_ball_pos = (next_wp[0], next_wp[1])
 
-                # Forhindrer loop: når approach er nået i runde 2,
-                # så kør direkte til væg-bolden uden ny replanning.
                 if not (COLLECTION_ROUND == 2 and _is_wall_ball(next_ball_pos)):
                     _replan_from_camera()
             continue
@@ -829,6 +853,9 @@ def robot_executor():
 
         elif wp_type == GOAL:
             robot.eject()
+            if (collection_start_time is not None
+                    and time.time() - collection_start_time > TIME_FOR_FIRST_DEPOSIT):
+                forced_deposit_done = True
             if COLLECTION_ROUND == 1:
                 COLLECTION_ROUND = 2
                 print("[robot] Runde 1 faerdig - starter runde 2 (vaeg-bolde)")
@@ -961,6 +988,7 @@ while True:
     if now - last_route_time >= ROUTE_INTERVAL_S and last_H_px_world is not None and last_cross is not None and not robot_running.is_set():
         w_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in whites_px]
         o_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in oranges_px]
+        w_mm, o_mm = _maybe_force_deposit(w_mm, o_mm)
         last_route = plan_route(w_mm, o_mm, start_mm, last_cross["center_mm"], last_goals)
         last_route_time = now
 
@@ -977,13 +1005,18 @@ while True:
         else:
             w_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in whites_px]
             o_mm = [pixel_to_world((x, y), last_H_px_world) for (x, y, r) in oranges_px]
+            w_mm, o_mm = _maybe_force_deposit(w_mm, o_mm)
             last_route = plan_route(w_mm, o_mm, start_mm, last_cross["center_mm"], last_goals)
             with route_lock: current_route.clear(); current_route.extend(last_route)
             print(f"Route: {len(last_route)} waypoints - press g to start")
     elif key == ord("g"):
         if not robot.connected: print("Robot not connected")
         elif not current_route: print("No route - press r first")
-        else: robot_stop_req.clear(); robot_running.set(); print("GO")
+        else:
+            if collection_start_time is None:
+                collection_start_time = time.time()
+                print("[robot] Deposit timer started - {}s until forced deposit".format(TIME_FOR_FIRST_DEPOSIT))
+            robot_stop_req.clear(); robot_running.set(); print("GO")
     elif key == ord("s"): robot_stop_req.set(); robot_running.clear(); robot.stop(); print("STOP")
     elif key == ord("c"): robot.collect(); print("Collect")
     elif key == ord("e"): robot.eject(); print("Eject")

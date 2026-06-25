@@ -38,7 +38,7 @@ WHEEL_DIAM_MM  = 56
 DRIVE_SPEED    = 30
 BALL_SPEED     = 10   # slower when sweeping through a ball
 TURN_SPEED     = 10
-COLLECT_SPEED  = 30
+COLLECT_SPEED  = 35
 COLLECT_TIME_S = 1.5
 
 motor_right   = LargeMotor(OUTPUT_A)
