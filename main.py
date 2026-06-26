@@ -29,11 +29,9 @@ CAMERA_INDEX       = 1
 DISPLAY_SCALE      = 0.5
 SMOOTH_ALPHA       = 0.80
 
-COLLECTION_ROUND = 1  # 1 = kun frie bolde, 2 = vaeg-bolde
+COLLECTION_ROUND = 1  
 
-# Taet approach i runde 2 - robotten er allerede linet op vinkelret via
-# _wall_approach()-punktet, saa her skal den faktisk koere HELT ind til
-# bolden, ikke stoppe langt fra den.
+
 APPROACH_OFFSET_MM_R2 = 30
 
 ARUCO_DICT         = aruco.DICT_4X4_50
@@ -62,8 +60,8 @@ BALL_SLOWDOWN_DIST_MM  = 160
 
 HEADING_SMOOTH_ALPHA = 0.15
 POSE_SMOOTH_ALPHA    = 0.60
-TIME_FOR_FIRST_DEPOSIT = 300   # seconds - force one deposit trip after this
-IGNORE_BALL_DIST_MM    = 200   # balls closer than this to the robot are ignored
+TIME_FOR_FIRST_DEPOSIT = 300   
+IGNORE_BALL_DIST_MM    = 200   
 
 GREEN_H_MIN      = 33
 GREEN_H_MAX      = 95
@@ -587,9 +585,6 @@ def plan_route(white_mm, orange_mm, robot_mm, cross_mm, goals_mm):
                        and not _inside_cross_zone(b, cross_mm)
                        and not _too_close_to_robot(b)]
     else:
-        # Round 2 drops the wall filter (it's specifically targeting wall
-        # balls), but must KEEP excluding cross-zone balls - those are
-        # unreachable/unsafe in either round.
         free_white = [b for b in white_mm if not _inside_cross_zone(b, cross_mm)
                       and not _too_close_to_robot(b)]
         free_orange = [b for b in orange_mm if not _inside_cross_zone(b, cross_mm)
@@ -693,9 +688,9 @@ last_pos_source = "none"
 LAST_TOP_CENTER = None
 LAST_SOLVED_MARKERS = None
 
-# --- DEPOSIT TIMER ---
-collection_start_time = None   # set on first 'g' press
-forced_deposit_done   = False  # set True once the forced trip has happened
+
+collection_start_time = None   
+forced_deposit_done   = False 
 
 robot_running  = threading.Event()
 robot_stop_req = threading.Event()
@@ -703,16 +698,11 @@ current_route  = []
 route_lock     = threading.Lock()
 
 def _deposit_timer_expired():
-    """True once TIME_FOR_FIRST_DEPOSIT seconds have passed since the
-    first 'g' press and we haven't already done the forced deposit trip."""
     return (collection_start_time is not None and not forced_deposit_done
             and time.time() - collection_start_time > TIME_FOR_FIRST_DEPOSIT)
 
 
 def _maybe_force_deposit(w_mm, o_mm):
-    """Returns empty ball lists if the deposit timer has expired, which
-    makes plan_route() fall straight through to goal delivery regardless
-    of how many balls are actually still on the board."""
     if _deposit_timer_expired():
         print("[robot] {}s elapsed - forcing deposit trip".format(TIME_FOR_FIRST_DEPOSIT))
         return [], []
@@ -740,7 +730,7 @@ def _replan_from_camera():
 
     if new_route: print(f"[robot] Replanned: {len(new_route)} waypoints")
     else:
-        print("[robot] All balls collected - heading to goal")
+        print("[robot] All balls collected. heading to goal")
         robot.stop(); robot_running.clear()
 
 def robot_executor():

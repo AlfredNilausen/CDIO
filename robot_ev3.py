@@ -1,26 +1,3 @@
-#!/usr/bin/env python3
-"""
-robot_ev3.py  -  korer PA EV3  (Python 3.4)
-
-TCP server on port 9999. Receives JSON commands, drives motors.
-
-Commands:
-  ping                  -> {status: pong}
-  stop                  -> emergency stop all motors + set stop flag
-  motor_stop            -> stop drive motors only (collector keeps running)
-  turn_left             -> start turning left  (collector on, non-blocking)
-  turn_right            -> start turning right (collector on, non-blocking)
-  drive   {mm: N}       -> drive N mm forward/backward (blocking, collector on)
-  collect               -> run collector forward for COLLECT_TIME_S
-  eject                 -> run agitated ejection loop for 10 seconds
-  resume                -> clear stop flag
-
-Buttons:
-  ENTER       stop / resume toggle
-  UP (hold)   collector forward
-  DOWN (hold) collector reverse
-"""
-
 import math
 import socket
 import json
@@ -36,7 +13,7 @@ WHEEL_BASE_MM  = 120
 WHEEL_DIAM_MM  = 56
 
 DRIVE_SPEED    = 30
-BALL_SPEED     = 10   # slower when sweeping through a ball
+BALL_SPEED     = 10   
 TURN_SPEED     = 10
 COLLECT_SPEED  = 35
 COLLECT_TIME_S = 1.5
@@ -194,24 +171,18 @@ def handle(cmd):
     if t == "eject":
         print("[EV3] Starting Agitated Ejection...")
         
-        # 1. Start a timer for the total ejection sequence (10 seconds total)
         end_time = time.time() + 15.0
         
-        # 2. Loop until the timer runs out
         while time.time() < end_time:
-            # WIGGLE 1: Full Power Eject (Pushing balls out)
-            motor_collect.on(SpeedPercent(-100)) # Max speed out
-            time.sleep(1.5)                      # Eject for 1 second
+            motor_collect.on(SpeedPercent(-100)) 
+            time.sleep(1.5)                      
             
-            # WIGGLE 2: Short Reverse/Collect (Unjamming the tube)
-            motor_collect.on(SpeedPercent(60))   # Pull back slightly
-            time.sleep(0.5)                      # Quick 0.3 second jerk backwards
+            motor_collect.on(SpeedPercent(60))   
+            time.sleep(0.5)                      
             
-        # 3. Final clear: give one last strong push out to clear the chamber
         motor_collect.on(SpeedPercent(-100))
         time.sleep(1.5)
         
-        # 4. Stop the motor
         motor_collect.off()
         print("[EV3] Ejection complete.")
         return {"status": "ejected"}
@@ -266,7 +237,6 @@ def main():
 
         finally:
            conn.close()
-
 
 if __name__ == "__main__":
     main()

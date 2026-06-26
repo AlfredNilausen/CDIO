@@ -1,9 +1,3 @@
-"""
-robot_client.py  -  korer pa PC
-
-Camera-guided TCP client for the EV3.
-"""
-
 import socket
 import json
 import math
@@ -12,7 +6,6 @@ import time
 EV3_HOST = "192.168.0.1"
 EV3_PORT = 9999
 TIMEOUT  = 30
-
 
 class RobotClient:
     def __init__(self, host=EV3_HOST, port=EV3_PORT):
@@ -85,15 +78,6 @@ class RobotClient:
     def drive_to_position(self, target_mm, get_pos_fn, reverse=False,
                           tol_mm=50, speed=20, timeout=5.0, stop_fn=None,
                           get_heading_fn=None):
-        """
-        Starts continuous drive, polls get_pos_fn() (returns (x,y) mm or None),
-        sends motor_stop when within tol_mm of target_mm.
-        If get_heading_fn is given, pauses once around the halfway point to
-        re-check and correct heading drift before continuing - wheel slip
-        or asymmetry can knock the heading off during a long drive, and that
-        error compounds the rest of the way to the target.
-        Returns True on success, False on timeout or stop request.
-        """
         if not self.connected:
             return True
 
@@ -139,8 +123,6 @@ class RobotClient:
             if pos is not None else -1))
         return False
 
-    # ── Angle helpers ────────────────────────────────────────────────────────
-
     @staticmethod
     def _angle_diff(target, current):
         return (target - current + 180) % 360 - 180
@@ -150,8 +132,6 @@ class RobotClient:
         s = sum(math.sin(math.radians(a)) for a in angles)
         c = sum(math.cos(math.radians(a)) for a in angles)
         return math.degrees(math.atan2(s, c))
-
-    # ── Camera-guided turn ───────────────────────────────────────────────────
 
     def _read_settled_heading(self, get_heading_fn, samples=3, gap=0.03):
         """Smoothed heading after a brief settle, to avoid reacting to a
@@ -169,18 +149,6 @@ class RobotClient:
 
     def turn_to_heading(self, target_heading, get_heading_fn,
                         pulse_ms=100, tol=3.0, timeout=2.0, stop_fn=None):
-        """
-        Turns to target_heading with discrete pulses: send turn_left/
-        turn_right for a short, fixed duration, stop completely, then
-        re-measure a settled heading and repeat. Each pulse is a small,
-        known move and the heading is only ever read while stationary, so
-        this doesn't depend on catching an in-motion camera reading at the
-        right instant (which was unreliable - momentum and camera/TCP
-        latency made continuous-turn-until-threshold overshoot inconsistently).
-        Pulse length scales down as the remaining angle shrinks, so it
-        doesn't blow through a target it's already close to.
-        Returns True on success, False on timeout / no heading / stop request.
-        """
         if not self.connected:
             return True
 
